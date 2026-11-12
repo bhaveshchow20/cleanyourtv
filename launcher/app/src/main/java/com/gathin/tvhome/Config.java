@@ -42,6 +42,10 @@ final class Config {
     static final String SETTINGS_NAME = "launcher_settings";
     static final String ROWS_BELOW_DOCK_KEY = "rows_below_dock";
     static final String WALLPAPER_CHOICE_KEY = "wallpaper_choice";
+    /** The on-TV Navigation sounds choice (tvos27 Settings); unset follows the theme. */
+    static final String NAVIGATION_SOUNDS_KEY = "navigation_sounds";
+    /** tvos27's appearance: "dark" (default), "light" or "auto" (TvDesign.applyAppearance). */
+    static final String APPEARANCE_KEY = "appearance";
     static final String DOCK_OPACITY_KEY = "dock_opacity";
     static final String CLOCK_FORMAT_KEY = "clock_format";
     /**
@@ -279,6 +283,26 @@ final class Config {
     final boolean singleRow;
     /** With single_row, the band runs behind every app in the row, not only the dock apps (config.xml, dock_band_all). */
     final boolean dockBandAll;
+    /** The design language Home is drawn in (config.xml, design_language): {@link TvDesign#DEFAULT} or {@link TvDesign#TVOS27}. */
+    final String designLanguage;
+    /** With design_language tvos27, the parallax tilt and highlight on a D-pad press (config.xml, focus_parallax). */
+    final boolean focusParallax;
+
+    /** design_language tvos27: navigation sounds (config.json navigation_sounds, Settings > Navigation sounds). */
+    boolean navigationSounds = true;
+    /** tvos27: "dark", "light" or "auto", from the theme's {@code appearance} or the choice made in Settings. */
+    String appearance = TvDesign.DARK;
+    /** design_language tvos27: the TMDB key for the Top Shelf backdrop (config.json tmdb_key), "" for none. */
+    String tmdbKey = "";
+    /** Country for which titles stream where (config.json tmdb_region): two letters, or "" / "auto" for the TV's. */
+    String tmdbRegion = "";
+    /** Package to TMDB watch-provider ids, "8|1796", or "off" (config.json tmdb_providers); null for none. */
+    JSONObject tmdbProviders;
+
+    /** design_language tvos27: Home uses the shared tvOS 27 focus, glass and motion. */
+    boolean tvos27() {
+        return TvDesign.TVOS27.equals(designLanguage);
+    }
 
     private Config(List<String> dockApps, boolean fillDock, List<String> hiddenApps, List<String> libraryApps, List<String> libraryExcludedApps, String liveTvPackage,
                    String liveTvAction, String liveTvInputId, Map<String, String> launchActions, Map<String, String> appLabels,
@@ -294,7 +318,10 @@ final class Config {
                    boolean keyFilter, boolean dockGlass, String glowStyle, boolean wallpaperCaptions,
                    boolean handleViewInputs, boolean tileMenu, boolean dockEvenPadding, boolean dockBand, boolean cinematicDots, boolean cinematicWhiteFocus, boolean wifiStatusColor, int cinematicScrim, int cinematicArt,
                    Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean homeIgnoreChannelKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly, boolean inputsCecStateOnly,
-                   int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock, boolean glowSnap) {
+                   int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock, boolean glowSnap,
+                   String designLanguage, boolean focusParallax) {
+        this.designLanguage = TvDesign.language(designLanguage);
+        this.focusParallax = focusParallax;
         this.handleViewInputs = handleViewInputs;
         this.tileMenu = tileMenu;
         this.inputKeycodes = inputKeycodes;
@@ -541,6 +568,8 @@ final class Config {
         String glassStyle = res.getString(R.string.glass_style);
         boolean singleRow = res.getBoolean(R.bool.single_row);
         boolean dockBandAll = res.getBoolean(R.bool.dock_band_all);
+        String designLanguage = res.getString(R.string.design_language);
+        boolean focusParallax = res.getBoolean(R.bool.focus_parallax);
         boolean applied = false;
 
         File dir = dir(ctx);
@@ -613,10 +642,8 @@ final class Config {
             skyIntensity = integer(json, "sky_intensity", skyIntensity, 0, 100);
             settingsKeycodes = intArray(json, "settings_key_keycodes", settingsKeycodes);
             settingsKeyPanel = bool(json, "settings_key_panel", settingsKeyPanel);
-            restoreKeyServices = bool(json, "restore_key_services", restoreKeyServices);
             inputKeycodes = intArray(json, "input_key_keycodes", inputKeycodes);
             handleViewInputs = bool(json, "handle_view_inputs", handleViewInputs);
-            appKeys = stringList(json, "app_keys", appKeys);
             stockHomeRedirect = string(json, "stock_home_redirect", stockHomeRedirect);
             cinematic = bool(json, "cinematic_home", cinematic);
             ambientGlow = bool(json, "ambient_glow", ambientGlow);
@@ -658,6 +685,12 @@ final class Config {
             glowStyle = string(json, "glow_style", glowStyle);
             glassStyle = string(json, "glass_style", glassStyle);
         }
+        // The tvos27 keys, and the remote keys it relies on, read in one place (Tvos27Keys) so the tests cover them.
+        Tvos27Keys t27 = Tvos27Keys.parse(json, designLanguage, focusParallax, restoreKeyServices, appKeys);
+        designLanguage = t27.designLanguage;
+        focusParallax = t27.focusParallax;
+        restoreKeyServices = t27.restoreKeyServices;
+        appKeys = t27.appKeys;
         // A top-bar app is moved there, not copied: it leaves the grid.
         for (String pkg : topBarApps) if (!hidden.contains(pkg)) hidden.add(pkg);
         // A theme push or reset invalidates choices made on the TV. On first use, remember the
@@ -700,13 +733,14 @@ final class Config {
             wallpapers.addAll(chosen);
             wallpaper = chosen.isEmpty() ? null : chosen.get(0);
             wallpaperEnabled = !chosen.isEmpty();
+            if (chosen.size() > 1 && rotationMinutes == 0) rotationMinutes = WallpaperRotation.PHONE_ROTATION_MINUTES;
         }
         // A festive skin comes only from a theme; config.xml has no festival. seasonal_skin names one the same way
         // but launchers before it ignore the key, so a theme can carry it without older ones showing the diya skin.
         Festival festival = json == null ? Festival.NONE : Festival.parse(festivalName(json),
                 string(json, "festival_until", ""), string(json, "greeting", ""), string(json, "accent_color", ""));
 
-        return new Config(dock, fillDock, hidden, libraryApps, libraryExcludedApps, liveTv, liveTvAction, liveTvInputId, packageMap(launchActions), packageMap(appLabels),
+        Config cfg = new Config(dock, fillDock, hidden, libraryApps, libraryExcludedApps, liveTv, liveTvAction, liveTvInputId, packageMap(launchActions), packageMap(appLabels),
                 packageMap(appBanners), panelService, panelAction, panelExtra, coocaaSources, inputAction, inputSources, inputUriScheme, Math.max(1, columns),
                 Math.max(0, rowsBelow), animations, advancedEffects, shamsi, greetingName, moduleCards, reducedMotion, bootToLiveTv,
                 openOnStartChoice, dockTitle, dockRow, topMenu, launcherSettingsButton, reorderButton, showNetworkPill, showInputsPill,
@@ -720,7 +754,14 @@ final class Config {
                 consumeVolumeKeys, homeIgnoreChannelKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
                 Math.max(0, Math.min(90, clockWallpaperDim)), clockGlow, glassStyle, singleRow && dockRow, dockBandAll, lunar, lunarOffset,
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly, inputsCecStateOnly,
-                Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, backOpensClock, glowSnap);
+                Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, backOpensClock, glowSnap,
+                designLanguage, focusParallax);
+        cfg.navigationSounds = choices.getBoolean(NAVIGATION_SOUNDS_KEY, t27.navigationSounds);
+        cfg.appearance = TvDesign.appearance(choices.getString(APPEARANCE_KEY, t27.appearance));
+        cfg.tmdbKey = t27.tmdbKey;
+        cfg.tmdbRegion = t27.tmdbRegion;
+        cfg.tmdbProviders = t27.tmdbProviders;
+        return cfg;
     }
 
     /**
@@ -764,12 +805,12 @@ final class Config {
             SharedPreferences.Editor editor = choices.edit();
             if (!"absent".equals(token)) editor.remove("columns").remove("animations")
                     .remove("advanced_effects").remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY)
-                    .remove(DOCK_OPACITY_KEY).remove(CLOCK_FORMAT_KEY);
+                    .remove(DOCK_OPACITY_KEY).remove(CLOCK_FORMAT_KEY).remove(APPEARANCE_KEY);
             editor.putString(THEME_SIGNATURE_KEY, signature).commit();
         } else if (!seen.equals(signature)) {
             choices.edit().remove("columns").remove("animations").remove("advanced_effects")
                     .remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY).remove(DOCK_OPACITY_KEY)
-                    .remove(CLOCK_FORMAT_KEY).putString(THEME_SIGNATURE_KEY, signature).commit();
+                    .remove(CLOCK_FORMAT_KEY).remove(APPEARANCE_KEY).putString(THEME_SIGNATURE_KEY, signature).commit();
         }
     }
 
@@ -919,6 +960,37 @@ final class Config {
             if (!pkg.isEmpty() && !value.isEmpty()) out.put(pkg, value);
         }
         return out;
+    }
+
+    /**
+     * The tvos27 keys of a theme's config.json over their config.xml values: a value of the wrong type is ignored and
+     * the default holds, as for every other key. {@code json} may be null (no theme pushed).
+     */
+    static final class Tvos27Keys {
+        String designLanguage, appearance = TvDesign.DARK, tmdbKey = "", tmdbRegion = "";
+        boolean focusParallax, navigationSounds = true, restoreKeyServices;
+        List<String> appKeys;
+        JSONObject tmdbProviders;
+
+        static Tvos27Keys parse(JSONObject json, String designLanguage, boolean focusParallax,
+                                boolean restoreKeyServices, List<String> appKeys) {
+            Tvos27Keys k = new Tvos27Keys();
+            k.designLanguage = designLanguage;
+            k.focusParallax = focusParallax;
+            k.restoreKeyServices = restoreKeyServices;
+            k.appKeys = appKeys;
+            if (json == null) return k;
+            k.designLanguage = string(json, "design_language", designLanguage);
+            k.focusParallax = bool(json, "focus_parallax", focusParallax);
+            k.restoreKeyServices = bool(json, "restore_key_services", restoreKeyServices);
+            k.appKeys = stringList(json, "app_keys", appKeys);
+            k.navigationSounds = bool(json, "navigation_sounds", true);
+            k.appearance = TvDesign.appearance(string(json, APPEARANCE_KEY, TvDesign.DARK));
+            k.tmdbKey = string(json, "tmdb_key", "");
+            k.tmdbRegion = string(json, "tmdb_region", "");
+            k.tmdbProviders = json.optJSONObject("tmdb_providers");
+            return k;
+        }
     }
 
     private static List<String> stringList(JSONObject o, String key, List<String> fallback) {

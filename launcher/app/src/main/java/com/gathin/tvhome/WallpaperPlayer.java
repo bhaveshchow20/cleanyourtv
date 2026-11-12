@@ -128,6 +128,14 @@ final class WallpaperPlayer {
         }
     }
 
+    /**
+     * design_language tvos27: the Top Shelf's opaque backdrop covers the whole screen, so the wallpaper under it need
+     * not draw; it shows again when focus goes down to the grid.
+     */
+    void setCovered(boolean covered) {
+        if (image.getParent() != null) image.setVisibility(covered ? View.INVISIBLE : View.VISIBLE);
+    }
+
     void start() {
         active = true;
         update();

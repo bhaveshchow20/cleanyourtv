@@ -21,3 +21,17 @@ bench-results/
 *.aab
 launcher/hs_err_pid*.log
 launcher/replay_pid*.log
+
+# Personal theme configs with API keys (e.g. a copy of themes/tvos27/config.json with "tmdb_key") stay local
+my-config.json
+*.local.json
+*.secret.json
+local-config/
+# Signing keys and IDE files
+*.jks
+*.keystore
+keystore.properties
+.idea/
+*.iml
+.vscode/
+launcher/captures/

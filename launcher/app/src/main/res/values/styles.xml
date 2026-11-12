@@ -53,4 +53,16 @@
         <item name="android:layout_marginEnd">10dp</item>
         <item name="android:gravity">center</item>
     </style>
+
+    <!-- tvOS 27 App library: it zooms up over Home and shrinks back into it (design_language tvos27). -->
+    <style name="TvosLibraryWindow">
+        <item name="android:windowEnterAnimation">@anim/tvos_open_enter</item>
+        <item name="android:windowExitAnimation">@anim/tvos_close_exit</item>
+    </style>
+    <!-- tvos27 Home: the window's shadow strength. Android's default spot shadow is too faint to lift a focused
+         card off a TV picture; applied over the activity theme in MainActivity, so other themes keep theirs. -->
+    <style name="TvosLighting">
+        <item name="android:spotShadowAlpha">0.5</item>
+        <item name="android:ambientShadowAlpha">0.16</item>
+    </style>
 </resources>

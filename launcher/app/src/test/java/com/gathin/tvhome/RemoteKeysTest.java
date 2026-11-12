@@ -328,4 +328,26 @@ public class RemoteKeysTest {
         assertFalse(RemoteKeys.isChannelKey(170));  // KEYCODE_TV
         assertFalse(RemoteKeys.isChannelKey(24));   // KEYCODE_VOLUME_UP
     }
+
+    // app_keys on TVs the theme was not written for (cross-brand safety)
+
+    @Test public void aGameControllersButtonsAreNeverRemoteShortcuts() {
+        int gamepad = android.view.InputDevice.SOURCE_GAMEPAD | android.view.InputDevice.SOURCE_JOYSTICK;
+        assertTrue("190 is a TCL remote's YouTube key and every controller's button 3", RemoteKeys.passThrough(190, gamepad));
+        assertTrue(RemoteKeys.passThrough(96, gamepad));   // BUTTON_A
+        assertFalse("the same code from a remote is the shortcut", RemoteKeys.passThrough(190,
+                android.view.InputDevice.SOURCE_KEYBOARD | android.view.InputDevice.SOURCE_DPAD));
+        assertFalse("a vendor key on a controller is not a gamepad button", RemoteKeys.passThrough(4062, gamepad));
+        assertFalse(RemoteKeys.passThrough(313, gamepad));
+    }
+
+    @Test public void onlyAppTargetsNameAPackageToCheck() {
+        assertEquals("com.tcl.tv.plus", RemoteKeys.targetPackage("com.tcl.tv.plus"));
+        assertEquals("com.example", RemoteKeys.targetPackage("com.example/.Main"));
+        assertEquals("com.tcl.tv", RemoteKeys.targetPackage("guide:com.tcl.tv"));
+        assertNull(RemoteKeys.targetPackage(RemoteKeys.INPUTS));
+        assertNull(RemoteKeys.targetPackage("sleep"));
+        assertNull(RemoteKeys.targetPackage("input:com.tcl.tvinput/.Hw/HW1"));
+        assertNull(RemoteKeys.targetPackage(null));
+    }
 }

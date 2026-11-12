@@ -42,15 +42,25 @@ final class WallpaperRotation {
 
     /** The on-TV choice (Launcher settings, Wallpaper) that turns the wallpaper off. */
     static final String CHOICE_NONE = "none";
+    /** The on-TV choice for the photos sent from a phone (PhoneUpload), which take turns. */
+    static final String CHOICE_PHONE = "phone";
+    /** How often phone photos take turns when the theme sets no wallpaper_rotation_minutes. */
+    static final int PHONE_ROTATION_MINUTES = 10;
 
     /**
      * What an on-TV wallpaper choice puts on Home in place of the theme's rotation: null when the theme decides
-     * (no choice, or a picture that is no longer there), an empty list for {@link #CHOICE_NONE}, or the one picture
-     * chosen from the theme's collection or its single {@code single} wallpaper.
+     * (no choice, or a picture that is no longer there), an empty list for {@link #CHOICE_NONE}, the phone photos in
+     * the collection for {@link #CHOICE_PHONE}, or the one picture chosen from the theme's collection or its single
+     * {@code single} wallpaper.
      */
     static List<File> chosen(List<File> collection, File single, String choice) {
         if (choice == null) return null;
         if (CHOICE_NONE.equals(choice)) return Collections.emptyList();
+        if (CHOICE_PHONE.equals(choice)) {
+            List<File> phone = new ArrayList<>();
+            for (File f : collection) if (PhoneUpload.isPhone(f)) phone.add(f);
+            return phone.isEmpty() ? null : phone;
+        }
         File picked = find(collection, choice);
         if (picked == null && single != null && choice.equals(single.getName())) picked = single;
         return picked == null ? null : Collections.singletonList(picked);

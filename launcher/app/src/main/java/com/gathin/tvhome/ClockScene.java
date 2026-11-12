@@ -178,8 +178,12 @@ final class ClockScene {
         }, "clock-wallpaper").start();
     }
 
-    /** WallpaperPlayer's decode: sampled and scaled down to cover the screen, never bigger than 4K. */
     private static Bitmap decode(File file, int screenW, int screenH) {
+        return decode(file, screenW, screenH, false, null);
+    }
+
+    /** WallpaperPlayer's decode: sampled and scaled down to cover the screen, never bigger than 4K. */
+    static Bitmap decode(File file, int screenW, int screenH, boolean trueColor, Bitmap reuse) {
         try {
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inJustDecodeBounds = true;
@@ -196,7 +200,17 @@ final class ClockScene {
                 options.inDensity = scale[0];
                 options.inTargetDensity = scale[1];
             }
-            options.inPreferredConfig = Bitmap.Config.RGB_565;
+            options.inPreferredConfig = trueColor ? Bitmap.Config.ARGB_8888 : Bitmap.Config.RGB_565;
+            if (reuse != null) {
+                // AerialScene: decode into the still that just went off screen instead of a new 4-8 MB bitmap.
+                options.inMutable = true;
+                options.inBitmap = reuse;
+                try {
+                    return BitmapFactory.decodeFile(file.getPath(), options);
+                } catch (IllegalArgumentException tooSmall) {
+                    options.inBitmap = null;
+                }
+            }
             return BitmapFactory.decodeFile(file.getPath(), options);
         } catch (Exception | OutOfMemoryError failure) {
             return null;

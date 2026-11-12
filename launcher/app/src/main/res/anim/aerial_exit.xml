@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- tvos27: the screensaver fades away to reveal Home (ClockActivity.finish). -->
+<alpha xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@interpolator/tvos_ease_out"
+    android:duration="500"
+    android:fromAlpha="1" android:toAlpha="0" />

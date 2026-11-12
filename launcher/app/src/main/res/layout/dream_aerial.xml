@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- design_language tvos27: the Aerial-style screensaver (AerialScene). Two stills cross-fade under a soft scrim, the
+     time rests at the top right and the still's name fades in at the bottom left. Sizes and margins are set in code
+     from TvDesign. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/aerialRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF000000">
+
+    <ImageView
+        android:id="@+id/aerialBack"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:importantForAccessibility="no" />
+
+    <ImageView
+        android:id="@+id/aerialFront"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:importantForAccessibility="no" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/aerial_scrim" />
+
+    <LinearLayout
+        android:id="@+id/aerialClock"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:gravity="end"
+        android:orientation="vertical">
+
+        <TextClock
+            android:id="@+id/aerialTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format12Hour="h:mm"
+            android:format24Hour="HH:mm"
+            android:textColor="#FFFFFFFF"
+            android:includeFontPadding="false"
+            android:shadowColor="#66000000"
+            android:shadowRadius="12" />
+
+        <TextClock
+            android:id="@+id/aerialDate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format12Hour="@string/date_format"
+            android:format24Hour="@string/date_format"
+            android:textColor="#CCFFFFFF"
+            android:shadowColor="#66000000"
+            android:shadowRadius="8" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/aerialCaption"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:textColor="#FFFFFFFF"
+        android:shadowColor="#80000000"
+        android:shadowRadius="10"
+        android:alpha="0" />
+</FrameLayout>

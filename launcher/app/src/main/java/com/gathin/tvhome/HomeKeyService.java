@@ -367,6 +367,13 @@ public class HomeKeyService extends AccessibilityService {
         if (service != null) service.performGlobalAction(GLOBAL_ACTION_POWER_DIALOG);
     }
 
+    /** tvos27 Control Center's Sleep: the "lock screen" global action, standby on a TV (Android 9 and later). */
+    static boolean sleep() {
+        HomeKeyService service = running;
+        return service != null && android.os.Build.VERSION.SDK_INT >= 28
+                && service.performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
+    }
+
     static boolean powerOnRedirect(String liveTv, CharSequence pkg, long now, long armedUntil) {
         return !liveTv.isEmpty() && pkg != null && liveTv.contentEquals(pkg) && now < armedUntil;
     }

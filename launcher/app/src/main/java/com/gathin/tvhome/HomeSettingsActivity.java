@@ -21,6 +21,11 @@ public class HomeSettingsActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        Config cfg = Config.load(this);
+        if (cfg.tvos27()) {
+            TvDesign.applyAppearance(this, cfg.appearance);
+            setContentView(TvosSettings.homeBackdrop(this));
+        }
         if (state != null) { left = true; return; }
         try {
             startActivity(new Intent(Settings.ACTION_HOME_SETTINGS));

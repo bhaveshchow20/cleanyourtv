@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AerialScene: darkens the top right behind the time and the bottom behind the caption, as tvOS does. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:gravity="top" android:height="320dp">
+        <shape>
+            <gradient android:angle="270" android:startColor="#59000000" android:endColor="#00000000" />
+        </shape>
+    </item>
+    <item android:gravity="bottom" android:height="360dp">
+        <shape>
+            <gradient android:angle="90" android:startColor="#80000000" android:centerColor="#26000000"
+                android:endColor="#00000000" />
+        </shape>
+    </item>
+</layer-list>

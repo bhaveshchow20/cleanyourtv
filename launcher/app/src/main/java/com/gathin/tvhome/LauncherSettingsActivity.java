@@ -43,75 +43,62 @@ public final class LauncherSettingsActivity extends Activity {
     private int rowsBelowDock;
     private int dockOpacity;
     private String clockFormat;
+    private String appearance = TvDesign.DARK;
     private boolean animations;
     private boolean advancedEffects;
+    private Config config;
+    /** The tvOS 27 two-pane screens (design_language tvos27); null for every other theme. */
+    private TvosSettings tvos;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         setContentView(R.layout.activity_launcher_settings);
         choices = getSharedPreferences(Config.SETTINGS_NAME, MODE_PRIVATE);
-        Config config = Config.load(this);
-        View reorderChoice = findViewById(R.id.reorderChoice);
-        reorderChoice.setVisibility(config.launcherSettingsButton ? View.VISIBLE : View.GONE);
-        reorderChoice.setOnClickListener(v -> {
-            setResult(RESULT_OK, new Intent().putExtra(EXTRA_REORDER, true));
-            finish();
-        });
+        config = Config.load(this);
         columns = config.columns;
         rowsBelowDock = config.rowsBelowDock;
         dockOpacity = config.dockOpacity;
         clockFormat = config.clockFormat;
         animations = config.animations;
         advancedEffects = config.animations && config.advancedEffects;
+        if (config.tvos27()) {
+            appearance = config.appearance;
+            TvDesign.applyAppearance(this, appearance);
+            NavSound.acquire(this, config.navigationSounds);
+            tvos = new TvosSettings(this, config);
+            setContentView(tvos.root());
+            NavSound.watch(tvos.root());
+            tvos.start();
+            return;
+        }
+        View reorderChoice = findViewById(R.id.reorderChoice);
+        reorderChoice.setVisibility(config.launcherSettingsButton ? View.VISIBLE : View.GONE);
+        reorderChoice.setOnClickListener(v -> reorder());
 
         int[] ids = {R.id.columns4, R.id.columns5, R.id.columns6, R.id.columns7};
         for (int i = 0; i < ids.length; i++) {
             final int value = i + 4;
             columnChoices[i] = findViewById(ids[i]);
-            columnChoices[i].setOnClickListener(v -> {
-                if (columns == value) return;
-                columns = value;
-                choices.edit().putInt("columns", value).apply();
-                changed();
-                refresh();
-            });
+            columnChoices[i].setOnClickListener(v -> setColumns(value));
         }
         int[] rowIds = {R.id.rows0, R.id.rows1, R.id.rows2, R.id.rows3};
         for (int i = 0; i < rowIds.length; i++) {
             final int value = i;
             rowChoices[i] = findViewById(rowIds[i]);
-            rowChoices[i].setOnClickListener(v -> {
-                if (rowsBelowDock == value) return;
-                rowsBelowDock = value;
-                choices.edit().putInt(Config.ROWS_BELOW_DOCK_KEY, value).apply();
-                changed();
-                refresh();
-            });
+            rowChoices[i].setOnClickListener(v -> setRowsBelowDock(value));
         }
         int[] dockIds = {R.id.dock100, R.id.dock70, R.id.dock50, R.id.dock30};
         for (int i = 0; i < dockIds.length; i++) {
             final int value = DOCK_OPACITIES[i];
             dockChoices[i] = findViewById(dockIds[i]);
-            dockChoices[i].setOnClickListener(v -> {
-                if (dockOpacity == value) return;
-                dockOpacity = value;
-                choices.edit().putInt(Config.DOCK_OPACITY_KEY, value).apply();
-                changed();
-                refresh();
-            });
+            dockChoices[i].setOnClickListener(v -> setDockOpacity(value));
         }
         int[] clockIds = {R.id.clockSystem, R.id.clock12, R.id.clock24};
         for (int i = 0; i < clockIds.length; i++) {
             final String value = CLOCK_FORMATS[i];
             clockChoices[i] = findViewById(clockIds[i]);
-            clockChoices[i].setOnClickListener(v -> {
-                if (value.equals(clockFormat)) return;
-                clockFormat = value;
-                choices.edit().putString(Config.CLOCK_FORMAT_KEY, value).apply();
-                changed();
-                refresh();
-            });
+            clockChoices[i].setOnClickListener(v -> setClockFormat(value));
         }
         // Mirror text alignment without globally opting the launcher into RTL. Numeric rows
         // still need explicit ordering in Android's no-supportsRtl compatibility mode.
@@ -126,14 +113,7 @@ public final class LauncherSettingsActivity extends Activity {
         wallpaperChoice = findViewById(R.id.wallpaperChoice);
         wallpaperChoice.setOnClickListener(v -> showWallpaperPicker());
         animationsChoice = findViewById(R.id.animationsChoice);
-        animationsChoice.setOnClickListener(v -> {
-            animations = !animations;
-            if (!animations) advancedEffects = false;
-            choices.edit().putBoolean("animations", animations)
-                    .putBoolean("advanced_effects", advancedEffects).apply();
-            changed();
-            refresh();
-        });
+        animationsChoice.setOnClickListener(v -> toggleAnimations());
         advancedChoice = findViewById(R.id.advancedChoice);
         advancedChoice.setOnClickListener(v -> {
             if (advancedEffects) {
@@ -153,28 +133,211 @@ public final class LauncherSettingsActivity extends Activity {
             openOnStartChoice.setOnClickListener(v -> showOpenOnStartPicker());
         }
         followThemeChoice = findViewById(R.id.followThemeChoice);
-        followThemeChoice.setOnClickListener(v -> {
-            if (!hasOnTvChoices()) return;
-            choices.edit().remove("columns").remove(Config.ROWS_BELOW_DOCK_KEY).remove("animations")
-                    .remove("advanced_effects").remove(Config.WALLPAPER_CHOICE_KEY)
-                    .remove(Config.DOCK_OPACITY_KEY).remove(Config.CLOCK_FORMAT_KEY).remove(OpenOnStart.KEY).commit();
-            Config current = Config.load(this);
-            columns = current.columns;
-            rowsBelowDock = current.rowsBelowDock;
-            dockOpacity = current.dockOpacity;
-            clockFormat = current.clockFormat;
-            animations = current.animations;
-            advancedEffects = current.animations && current.advancedEffects;
-            changed();
-            refresh();
-        });
-        findViewById(R.id.defaultHomeChoice).setOnClickListener(v ->
-                open(new Intent(this, HomeSettingsActivity.class)));
-        findViewById(R.id.tvSettingsChoice).setOnClickListener(v ->
-                open(SystemSettings.intent(this, Settings.ACTION_SETTINGS)));
+        followThemeChoice.setOnClickListener(v -> followTheme());
+        findViewById(R.id.defaultHomeChoice).setOnClickListener(v -> openHomeSettings());
+        findViewById(R.id.tvSettingsChoice).setOnClickListener(v -> openTvSettings());
         refresh();
         if (config.launcherSettingsButton) reorderChoice.requestFocus();
         else columnChoices[Math.max(0, Math.min(columns - 4, 3))].requestFocus();
+    }
+
+    // ---- The changes both looks make -------------------------------------------------------------------
+
+    int columns() { return columns; }
+    int rowsBelowDock() { return rowsBelowDock; }
+    int dockOpacity() { return dockOpacity; }
+    String clockFormat() { return clockFormat; }
+    boolean animations() { return animations; }
+
+    boolean navigationSounds() {
+        return choices.getBoolean(Config.NAVIGATION_SOUNDS_KEY, config.navigationSounds);
+    }
+
+    void toggleNavigationSounds() {
+        boolean on = !navigationSounds();
+        choices.edit().putBoolean(Config.NAVIGATION_SOUNDS_KEY, on).apply();
+        NavSound.setEnabled(on);
+        refresh();
+    }
+
+    /** tvos27: the open sound on Select. */
+    @Override
+    public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        if (tvos != null) NavSound.key(event, getCurrentFocus());
+        return super.dispatchKeyEvent(event);
+    }
+    boolean advancedEffects() { return advancedEffects; }
+    SharedPreferences choices() { return choices; }
+
+    void reorder() {
+        setResult(RESULT_OK, new Intent().putExtra(EXTRA_REORDER, true));
+        finish();
+    }
+
+    void setColumns(int value) {
+        if (columns == value) return;
+        columns = value;
+        choices.edit().putInt("columns", value).apply();
+        changed();
+        refresh();
+    }
+
+    void setRowsBelowDock(int value) {
+        if (rowsBelowDock == value) return;
+        rowsBelowDock = value;
+        choices.edit().putInt(Config.ROWS_BELOW_DOCK_KEY, value).apply();
+        changed();
+        refresh();
+    }
+
+    void setDockOpacity(int value) {
+        if (dockOpacity == value) return;
+        dockOpacity = value;
+        choices.edit().putInt(Config.DOCK_OPACITY_KEY, value).apply();
+        changed();
+        refresh();
+    }
+
+    String appearance() { return appearance; }
+
+    /**
+     * tvos27: dark, light or auto. The palette is colour tokens read while views are built, so the change shows by
+     * rebuilding: this screen recreates now, back on the Appearance level, and Home on its next resume.
+     */
+    void setAppearance(String value) {
+        if (value.equals(appearance)) return;
+        appearance = value;
+        choices.edit().putString(Config.APPEARANCE_KEY, value).apply();
+        changed();
+        boolean was = TvDesign.light;
+        if (TvDesign.applyAppearance(this, value) == was) {
+            refresh();
+            return;
+        }
+        getIntent().putExtra(TvosSettings.EXTRA_PAGE, TvosSettings.PAGE_APPEARANCE);
+        recreate();
+    }
+
+    void setClockFormat(String value) {
+        if (value.equals(clockFormat)) return;
+        clockFormat = value;
+        choices.edit().putString(Config.CLOCK_FORMAT_KEY, value).apply();
+        changed();
+        refresh();
+    }
+
+    void toggleAnimations() {
+        animations = !animations;
+        if (!animations) advancedEffects = false;
+        choices.edit().putBoolean("animations", animations)
+                .putBoolean("advanced_effects", advancedEffects).apply();
+        changed();
+        refresh();
+    }
+
+    void followTheme() {
+        if (!hasOnTvChoices()) return;
+        choices.edit().remove("columns").remove(Config.ROWS_BELOW_DOCK_KEY).remove("animations")
+                .remove("advanced_effects").remove(Config.WALLPAPER_CHOICE_KEY)
+                .remove(Config.DOCK_OPACITY_KEY).remove(Config.CLOCK_FORMAT_KEY).remove(OpenOnStart.KEY)
+                .remove(Config.APPEARANCE_KEY).commit();
+        Config current = Config.load(this);
+        columns = current.columns;
+        rowsBelowDock = current.rowsBelowDock;
+        dockOpacity = current.dockOpacity;
+        clockFormat = current.clockFormat;
+        boolean wasLight = TvDesign.light;
+        appearance = current.appearance;
+        if (tvos != null && TvDesign.applyAppearance(this, appearance) != wasLight) {
+            changed();
+            recreate();
+            return;
+        }
+        animations = current.animations;
+        advancedEffects = current.animations && current.advancedEffects;
+        changed();
+        refresh();
+    }
+
+    /** null for the theme's default, "none", or a picture's file name. */
+    void chooseWallpaper(String name) {
+        if (name == null) choices.edit().remove(Config.WALLPAPER_CHOICE_KEY).apply();
+        else choices.edit().putString(Config.WALLPAPER_CHOICE_KEY, name).apply();
+        changed();
+        refresh();
+    }
+
+    /** "" for Off, or the package to open on the next boot. */
+    void setOpenOnStart(String pkg) {
+        if (pkg.isEmpty()) choices.edit().remove(OpenOnStart.KEY).apply();
+        else {
+            OpenOnStart.skipThisBoot(this);
+            choices.edit().putString(OpenOnStart.KEY, pkg).apply();
+        }
+        refresh();
+    }
+
+    void openHomeSettings() {
+        open(new Intent(this, HomeSettingsActivity.class));
+    }
+
+    void openTvSettings() {
+        open(SystemSettings.intent(this, Settings.ACTION_SETTINGS));
+    }
+
+    /** The theme's wallpaper.jpg first, then its wallpapers/ folder. */
+    List<File> wallpapers() {
+        File dir = Config.dir(this);
+        List<File> images = new ArrayList<>(WallpaperRotation.images(
+                dir == null ? null : new File(dir, "wallpapers")));
+        // A theme with a single wallpaper.jpg offers that picture too (Config maps the choice back to it).
+        File single = dir == null ? null : new File(dir, Config.WALLPAPER_NAME);
+        if (single != null && single.isFile()) images.add(0, single);
+        return images;
+    }
+
+    /** {label, package} for every app with a TV entry point, by name. */
+    List<String[]> tvApps() {
+        List<String[]> apps = tvApps();
+        return apps;
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (tvos != null && tvos.back()) return;
+        super.onBackPressed();
+    }
+
+    /** The phone-upload server never outlives the screen being in front. */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (tvos != null) NavSound.resumed();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (tvos != null) {
+            tvos.pause();
+            NavSound.paused();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (tvos != null) {
+            tvos.destroy();
+            NavSound.release();
+        }
+        super.onDestroy();
+    }
+
+    @Override
+    public void finish() {
+        super.finish();
+        if (tvos != null) TvMotion.close(this, config.animations, config.reducedMotion);
     }
 
     private void reverseRow(TextView[] views) {
@@ -184,12 +347,7 @@ public final class LauncherSettingsActivity extends Activity {
     }
 
     private void showWallpaperPicker() {
-        File dir = Config.dir(this);
-        List<File> images = new java.util.ArrayList<>(WallpaperRotation.images(
-                dir == null ? null : new File(dir, "wallpapers")));
-        // A theme with a single wallpaper.jpg offers that picture too (Config maps the choice back to it).
-        File single = dir == null ? null : new File(dir, Config.WALLPAPER_NAME);
-        if (single != null && single.isFile()) images.add(0, single);
+        List<File> images = wallpapers();
         String[] labels = new String[images.size() + 1];
         for (int i = 0; i < images.size(); i++) labels[i] = images.get(i).getName();
         labels[images.size()] = getString(R.string.wallpaper_none);
@@ -200,21 +358,10 @@ public final class LauncherSettingsActivity extends Activity {
                 .setTitle(R.string.wallpaper_label)
                 .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                     dialog.dismiss();
-                    if (which == images.size()) {
-                        choices.edit().putString(Config.WALLPAPER_CHOICE_KEY, "none").apply();
-                    } else {
-                        choices.edit().putString(Config.WALLPAPER_CHOICE_KEY,
-                                images.get(which).getName()).apply();
-                    }
-                    changed();
+                    chooseWallpaper(which == images.size() ? "none" : images.get(which).getName());
                     Toast.makeText(this, R.string.wallpaper_applied, Toast.LENGTH_SHORT).show();
-                    refresh();
                 })
-                .setNeutralButton(R.string.wallpaper_theme_default, (dialog, which) -> {
-                    choices.edit().remove(Config.WALLPAPER_CHOICE_KEY).apply();
-                    changed();
-                    refresh();
-                })
+                .setNeutralButton(R.string.wallpaper_theme_default, (dialog, which) -> chooseWallpaper(null))
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
     }
@@ -244,19 +391,14 @@ public final class LauncherSettingsActivity extends Activity {
                 .setTitle(R.string.open_on_start_label)
                 .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                     dialog.dismiss();
-                    if (which == 0) choices.edit().remove(OpenOnStart.KEY).apply();
-                    else {
-                        OpenOnStart.skipThisBoot(this);
-                        choices.edit().putString(OpenOnStart.KEY, apps.get(which - 1)[1]).apply();
-                    }
-                    refresh();
+                    setOpenOnStart(which == 0 ? "" : apps.get(which - 1)[1]);
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
     }
 
     /** The picked app's name, its package when it is gone, or Off. */
-    private String openOnStartLabel() {
+    String openOnStartLabel() {
         String pkg = choices.getString(OpenOnStart.KEY, "");
         if (pkg.isEmpty()) return getString(R.string.off);
         try {
@@ -285,7 +427,7 @@ public final class LauncherSettingsActivity extends Activity {
                 choices.getLong(Config.SETTINGS_REVISION_KEY, 0) + 1).apply();
     }
 
-    private void setAdvanced(boolean enabled) {
+    void setAdvanced(boolean enabled) {
         advancedEffects = enabled;
         choices.edit().putBoolean("advanced_effects", enabled).apply();
         changed();
@@ -293,6 +435,10 @@ public final class LauncherSettingsActivity extends Activity {
     }
 
     private void refresh() {
+        if (tvos != null) {
+            tvos.refresh();
+            return;
+        }
         for (int i = 0; i < columnChoices.length; i++) {
             columnChoices[i].setSelected(columns == i + 4);
         }
@@ -320,11 +466,12 @@ public final class LauncherSettingsActivity extends Activity {
         followThemeChoice.setSelected(!hasOnTvChoices());
     }
 
-    private boolean hasOnTvChoices() {
+    boolean hasOnTvChoices() {
         return choices.contains("columns") || choices.contains(Config.ROWS_BELOW_DOCK_KEY)
                 || choices.contains("animations") || choices.contains("advanced_effects")
                 || choices.contains(Config.WALLPAPER_CHOICE_KEY) || choices.contains(Config.DOCK_OPACITY_KEY)
-                || choices.contains(Config.CLOCK_FORMAT_KEY) || choices.contains(OpenOnStart.KEY);
+                || choices.contains(Config.CLOCK_FORMAT_KEY) || choices.contains(OpenOnStart.KEY)
+                || choices.contains(Config.APPEARANCE_KEY);
     }
 
     private void open(Intent intent) {

@@ -16,6 +16,8 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ChangedPackages;
 import android.content.res.ColorStateList;
+import android.graphics.Outline;
+import android.view.ViewOutlineProvider;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -25,6 +27,7 @@ import android.graphics.Paint;
 import android.graphics.RadialGradient;
 import android.graphics.Rect;
 import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -63,6 +66,7 @@ import android.view.Window;
 import android.view.animation.AnimationUtils;
 import android.view.animation.LayoutAnimationController;
 import android.widget.FrameLayout;
+import android.widget.TextClock;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
@@ -164,6 +168,47 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** config.xml cinematic_white_focus: the cinematic shelf keeps the white highlight. */
     private boolean cinematicWhiteFocus;
     private ImageView heroArt;
+    /** design_language tvos27 with a TMDB key: titles on the focused app's service behind the shelf, else null. */
+    private TmdbBackdrop tmdbBackdrop;
+    private Tmdb tmdb;
+    /** design_language tvos27 with TMDB: the backdrop title's logo, bottom left above the dock. */
+    private ImageView tmdbLogo;
+    /** design_language tvos27: Up from the dock over a TMDB backdrop shows it full screen (enterFullBackdrop). */
+    private boolean fullBackdrop;
+    /** The key that left full screen: its other half (and repeats) is eaten, so it does nothing else. */
+    private int fullExitKey = KeyEvent.KEYCODE_UNKNOWN;
+    /** The "Press ▲ for full screen" hint under the dock, made the one time it shows. */
+    private TextView fullHint;
+    private static final String PREF_FULL_HINT = "tvos_full_hint_shown";
+    /** tvos27 edit mode (reorder mode restyled): the tiles' wobble, and the "when done" capsule at the top. */
+    private ValueAnimator jiggle;
+    private TextView editHint;
+    /** tvos27 edit mode: the tile the carried app rests over (Select there makes a folder), or -1. */
+    private int hoverPos = -1;
+    private final Runnable commitHover = this::commitHover;
+    /** tvos27: the open folder, or null. */
+    private FolderSheet folderSheet;
+    /** design_language tvos27: the shelf's previous artwork, under heroArt while the next one fades in over it. */
+    private ImageView heroArtBack;
+    /** design_language tvos27: the edge-to-edge glass band behind the top row, kept on that row as the grid scrolls. */
+    private View dockBand;
+    /** design_language tvos27: the small time capsule at the top right that replaces the large clock. */
+    private TextClock tvClock;
+    /** design_language tvos27: the time capsule, faded out while Control Center or the Inputs panel covers it. */
+    private View tvCapsule;
+    private boolean ccCovers, inputsCover;
+    /** design_language tvos27: the Inputs panel while it is up, and the one being filled by showInputs(). */
+    private TvosInputs inputsSheet, buildingSheet;
+    /** The next showInputs() comes from Control Center's Inputs tile (EXTRA_FROM_CONTROL_CENTER). */
+    private boolean inputsFromCc;
+    static final String EXTRA_FROM_CONTROL_CENTER = "com.gathin.tvhome.FROM_CONTROL_CENTER";
+    /** Whether Home found inputs (or Live TV) to list; Control Center shows its Inputs tile only then. */
+    static volatile boolean inputsAvailable;
+    private static java.lang.ref.WeakReference<MainActivity> home = new java.lang.ref.WeakReference<>(null);
+    /** design_language tvos27: the top bar is only the time capsule; the other pills never show. */
+    private boolean tvosTopBar;
+    /** design_language tvos27: the account avatar in the time capsule. */
+    private ImageView tvAvatar;
     /** config.xml cinematic_dots: false leaves the dock position dots out of the cinematic shelf. */
     private boolean heroDotsShown = true;
     /** The artwork's opacity behind the cinematic shelf (config.xml cinematic_art); 0 leaves it out. */
@@ -258,6 +303,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean settingsKeyPanel;
     /** Calmer motion for weak GPUs (config.xml, reduced_motion): stiff spring, short fades, no replay. */
     private boolean reducedMotion;
+    /** design_language tvos27's focus effect for Home's own views, or null for the launcher's own look. */
+    private TvFocus.Spec tvos;
+    /** tvos27: the appearance choice, and whether this Home was built with the light palette (TvDesign). */
+    private String appearance = TvDesign.DARK;
+    private boolean builtLight;
     /** config.xml dock_row: the first row is a separate dock (band, parked low, top shelf) rather than plain grid. */
     private boolean dockRow;
     /** config single_row: every app in the dock's row, scrolling sideways, no grid below. */
@@ -452,13 +502,44 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private String clockFormat = "system";
     private java.util.Map<Integer, String> homeHoldAppKeys = java.util.Collections.emptyMap();
 
+    /** design_language tvos27: TextViews inflated from now on draw in Inter (see onCreateView). */
+    private boolean interText;
+
+    @Override
+    public View onCreateView(View parent, String name, Context context, android.util.AttributeSet attrs) {
+        if (interText) {
+            TextView t = "TextView".equals(name) ? new TextView(context, attrs)
+                    : "TextClock".equals(name) ? new TextClock(context, attrs) : null;
+            if (t != null) {
+                t.setTypeface(TvDesign.interFor(context, t.getTypeface()));
+                return t;
+            }
+        }
+        return super.onCreateView(parent, name, context, attrs);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Debug builds only: disk or network on the main thread, and leaked closeables, show in logcat (StrictMode).
+        if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                && System.getProperty("tvhome.strict") == null) {
+            System.setProperty("tvhome.strict", "on");
+            android.os.StrictMode.setThreadPolicy(new android.os.StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads().detectDiskWrites().detectNetwork().penaltyLog().build());
+            android.os.StrictMode.setVmPolicy(new android.os.StrictMode.VmPolicy.Builder()
+                    .detectLeakedClosableObjects().detectActivityLeaks().penaltyLog().build());
+        }
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         density = getResources().getDisplayMetrics().density;
         // config.xml, overlaid by config.json from a pushed theme (see Config and tools/theme.sh).
         Config cfg = Config.load(this);
+        appearance = cfg.appearance;
+        if (cfg.tvos27()) {
+            builtLight = TvDesign.applyAppearance(this, appearance);
+            // Read when the window's renderer is made, after onCreate: a stronger shadow under the focused card.
+            getTheme().applyStyle(R.style.TvosLighting, true);
+        }
         homeAppKeys = RemoteKeys.parseAppKeys(cfg.appKeys);
         clockFormat = cfg.clockFormat;
         ClockFormat.apply(getWindow().getDecorView(), clockFormat);
@@ -476,6 +557,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         animations = cfg.animations;
         advancedEffects = cfg.animations && cfg.advancedEffects;
         reducedMotion = cfg.reducedMotion;
+        tvos = cfg.tvos27() ? TvFocus.Spec.of(cfg) : null;
+        if (tvos != null) {
+            NavSound.acquire(this, cfg.navigationSounds);
+            NavSound.watch(getWindow().getDecorView());
+        }
+        if (tvos != null) {
+            // Inter in place of the layouts' Outfit: what is inflated already, then each view inflated later.
+            interText = true;
+            TvDesign.useInter(getWindow().getDecorView());
+        }
         dockRow = cfg.dockRow;
         singleRow = cfg.singleRow;
         focusOvershoot = cfg.focusOvershoot;
@@ -502,7 +593,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         coocaaSources = cfg.coocaaSources;
 
         root = findViewById(R.id.root);
-        root.setBackgroundColor(cfg.backgroundColor);
+        // tvos27: tvOS's calm dark gradient where no wallpaper or phone photo covers it; background_color otherwise.
+        if (cfg.tvos27()) root.setBackground(TvDesign.backdrop());
+        else root.setBackgroundColor(cfg.backgroundColor);
         // root fills the window with an opaque colour (Config keeps background_color opaque), so the window's own
         // black under it is a second full-screen fill on every frame for nothing. The starting window still uses
         // the theme's background, so launch looks the same.
@@ -513,6 +606,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         glass = findViewById(R.id.glass);
         glass.setStyle(cfg.glassStyle);
         if (festive) glass.setAccent(festival.accentColor());
+        // tvOS has no highlight over the item: the focused tile itself grows and rises (TvFocus).
+        if (tvos != null) glass.setVisibility(View.GONE);
         ambient = findViewById(R.id.ambient);
         // The glow is one bitmap, so its alpha can be applied while drawing it. Otherwise every frame of
         // a fade renders it into a full-screen offscreen buffer first.
@@ -535,6 +630,23 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         cinematicWhiteFocus = cfg.cinematicWhiteFocus;
         heroArtAlpha = cfg.cinematicArt / 100f;
         if (cinematic) setUpCinematicShelf(cfg.cinematicScrim);
+        if (cinematic && tvos != null) {
+            setUpTvosShelf();
+            // With a TMDB key, a streaming app's titles take over the shelf after a dwell (TmdbBackdrop).
+            tmdb = Tmdb.create(this, cfg);
+            if (tmdb != null) {
+                // Above the scrim, under the dock's glass; placeDockBand keeps it just above the dock.
+                tmdbLogo = new ImageView(this);
+                tmdbLogo.setVisibility(View.GONE);
+                tmdbLogo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+                tmdbLogo.forceHasOverlappingRendering(false);
+                root.addView(tmdbLogo, root.indexOfChild(dockBand), new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                tmdbBackdrop = new TmdbBackdrop(this, tmdb, root, root.indexOfChild(heroArt) + 1, hero, tmdbLogo,
+                        animations && !reducedMotion, heroArt, heroArtBack);
+                tmdbBackdrop.onShown = this::maybeShowFullHint;
+            }
+        }
         // dock_title false: the name above the dock (and the cinematic lines under it) never shows; the glow
         // still follows the dock.
         if (!cfg.dockTitle) hero.setVisibility(View.GONE);
@@ -677,13 +789,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             @Override
             public void onChildViewAttachedToWindow(@NonNull View v) {
                 v.setAlpha(tileAlpha(grid.getChildAdapterPosition(v)));
+                // The same for an angle: a tile that scrolled out mid-wobble comes back level once edit mode is over.
+                if (tvos != null && jiggle == null) levelTile(v);
             }
 
             @Override
             public void onChildViewDetachedFromWindow(@NonNull View v) {
             }
         });
-        if (dockRow) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
+        if (dockRow) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand && dockBand == null,
                 singleRow, cfg.dockBandAll));
         if (cfg.fadeRows) TopFade.attach(grid, 48 * density);
         // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
@@ -705,7 +819,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             int h = b - t;
             // Item height follows the tile size, which follows the columns and the rows that must fit (AppAdapter.tileWidthPx).
             int inner = (r - l) - grid.getPaddingLeft() - grid.getPaddingRight();
-            int tileW = AppAdapter.tileWidthPx(inner, h, COLUMNS, rowsBelowDock, cfg.dockTitle, cfg.dockRow, density);
+            int tileW = AppAdapter.tileWidthPx(inner, h, COLUMNS, rowsBelowDock, cfg.dockTitle, cfg.dockRow, density,
+                    tvos != null ? Math.round(TvDesign.px(this, TvDesign.Layout.dockGap(COLUMNS))) : 0);
             int itemH = AppAdapter.itemHeightPx(AppAdapter.tileHeightPx(tileW), density);
             int dockRow = itemH + (int) (AppAdapter.DOCK_EXTRA_DP * density);   // item height plus DockDecoration offsets
             int gridRows = itemH * rowsBelowDock;
@@ -721,6 +836,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // A single row never shows the names under its tiles (the title above the row names the app), so the
             // 7dp gap and 22dp label item_app.xml keeps for them would only lift the row: sit it that much lower.
             if (singleRow && !cfg.alwaysShowNames) want += (int) (29 * density);
+            // tvOS: the top row sits low over the shelf's artwork, and only the top of the next row peeks in.
+            if (tvos != null && MainActivity.this.dockRow && !singleRow) {
+                want = Math.max(want, h - dockRow - (int) (8 * density) - Math.round(TvDesign.px(MainActivity.this, 44)));
+            }
             if (grid.getPaddingTop() != want) {
                 grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
                 // A vertical grid parks the dock on the new padding line by scrolling (onTileFocused); a sideways
@@ -833,6 +952,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
             else open(systemIntent(Settings.ACTION_SETTINGS));
         });
+        // tvOS 27: the gear opens Control Center, as the remote's Settings button does with settings_key_panel.
+        if (cfg.tvos27() && cfg.settingsKeyPanel && !launcherSettingsButton) {
+            btnSettings.setOnClickListener(v -> open(new Intent(this, QuickSettingsActivity.class)));
+        }
         btnReorder = findViewById(R.id.btnReorder);
         btnReorder.setOnClickListener(v -> toggleReorder());
         btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
@@ -881,6 +1004,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             makeIconOnly((TextView) btnSettings);
         }
         if (cfg.iconOnlyInputs) makeIconOnly((TextView) btnInputs);
+        if (tvos != null) {
+            // tvOS 27: the top bar's buttons are Liquid Glass capsules that turn white while focused.
+            ViewGroup bar = findViewById(R.id.topButtons);
+            for (int k = 0; k < bar.getChildCount(); k++) bar.getChildAt(k).setBackground(LiquidGlass.control(this));
+            setUpTvosTopBar((LinearLayout) bar);
+        }
         iconOnlyVpn = vpnPill && cfg.iconOnlyVpn;
         if (iconOnlyVpn) {
             vpnPlainBackground = btnVpn.getBackground().getConstantState();
@@ -992,6 +1121,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean openInputsIfAsked(Intent intent) {
         if (intent == null || !ACTION_VIEW_INPUTS.equals(intent.getAction())) return false;
         setIntent(new Intent(Intent.ACTION_MAIN));
+        if (tvos != null) {
+            // tvos27: a panel of its own, with no pill to hang from; it opens once Home has a window.
+            boolean fromCc = intent.getBooleanExtra(EXTRA_FROM_CONTROL_CENTER, false);
+            Runnable show = () -> {
+                if (isFinishing()) return;
+                inputsFromCc = fromCc;
+                showInputs();
+            };
+            if (root.isLaidOut()) {
+                root.post(show);
+            } else {
+                root.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+                    @Override
+                    public void onGlobalLayout() {
+                        root.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                        root.post(show);
+                    }
+                });
+            }
+            return true;
+        }
         View anchor = topMenu ? findViewById(R.id.btnSettings) : btnInputs;
         if (anchor.getVisibility() != View.VISIBLE) return true;
         if (anchor.isLaidOut()) {
@@ -1053,6 +1203,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (openLibraryIfAsked(intent)) return;
         if (openInputsIfAsked(intent)) return;
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
+        if (inputsSheet != null) inputsSheet.close();
         if (gameDay != null && !stopped) gameDay.read();
         grid.scrollToPosition(0);
         lastFocused = 0;
@@ -1085,6 +1236,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onResume() {
         super.onResume();
         resumed = true;
+        if (tvos != null) NavSound.resumed();
+        // An account picked in Control Center's chooser meanwhile: one binder call, off the main thread.
+        if (tvAvatar != null) {
+            GoogleAccount.load(this, true, a -> tvAvatar.setImageDrawable(GoogleAccount.avatar(this, a)));
+        }
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1097,6 +1253,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             recreate();
             return;
         }
+        // tvos27 Automatic: the day turned to night (or back) while Home was away.
+        if (tvos != null && TvDesign.wantsLight(this, appearance) != builtLight) {
+            recreate();
+            return;
+        }
+        if (!reordering) levelTiles();
         restartIdleClock();
         promptsPaused = false;
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
@@ -1204,8 +1366,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             heroShown = false;
             hero.setAlpha(0f);
             ambient.setAlpha(0f);
+            if (tmdbBackdrop != null) tmdbBackdrop.pause();
             heroArt.animate().cancel();
             heroArt.setAlpha(0f);
+            if (heroArtBack != null) wallpaperPlayer.setCovered(false);
         }
         if (rebuild) reloadTiles();
         if (animate && entrance && animations && !reducedMotion) {
@@ -1301,17 +1465,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        if (tvos != null) NavSound.paused();
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
         RemoteKeys.release(this);
         cancelHoldOk();
+        exitFullBackdrop(false, false);
         root.removeCallbacks(showIdleClock);
         endReorder();   // Home or another app while reordering keeps the order so far
+        stopJiggle();   // and nothing stays angled for the way back, even with no reorder on
         wallpaperPlayer.stop();
         stopAmbientAnimation();
         hero.animate().cancel();
         ambient.animate().cancel();
         heroArt.animate().cancel();
+        if (tmdbBackdrop != null) tmdbBackdrop.pause();
         handler.removeCallbacks(minuteTick);
         handler.removeCallbacks(openWhenOnline);
         startPending = null;   // leaving Home before the network came back: the boot's app stays closed
@@ -1324,6 +1492,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (cardPrompt != null) cardPrompt.dismiss();
         if (appLibrary != null) appLibrary.close();
         if (openPopup != null) openPopup.dismiss();
+        if (inputsSheet != null) inputsSheet.dismiss();
     }
 
     @Override
@@ -1335,6 +1504,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         handler.removeCallbacks(clockCheck);
         stopped = true;
         tileRefresh.onStop();
+        if (tmdbBackdrop != null) tmdbBackdrop.pause();   // already done in onPause; Home out of sight stays quiet
+        if (!reordering) levelTiles();
     }
 
     /**
@@ -1355,6 +1526,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.getRecycledViewPool().clear();
         heroArtCache.clear();
         heroArtKey = null;
+        if (tmdbBackdrop != null) tmdbBackdrop.release();
         wallpaperPlayer.releaseForMemoryPressure();
         tileRefresh.invalidate();
     }
@@ -1368,18 +1540,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             showCardPrompt();
         } else {
             cancelHoldOk();   // a dialog or another window took the remote while OK was held
+            if (!reordering) levelTiles();   // a nudge cut short by the menu or another window stays level
         }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (tvos != null) NavSound.release();
+        if (home.get() == this) home.clear();
         RemoteKeys.release(this);
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
         wallpaperPlayer.close();
+        if (tmdb != null) tmdb.shutdown();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.unregisterCallback(inputCallback);
@@ -1421,7 +1597,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (fullBackdropKey(event)) return true;
+        if (tvos != null) NavSound.key(event, getCurrentFocus());
         if (homeIgnoreChannelKeys && RemoteKeys.isChannelKey(event.getKeyCode())) return true;
+        // tvos27: the remote's Input button on Home opens the Inputs panel, as VIEW_INPUTS does.
+        if (tvos != null && event.getKeyCode() == KeyEvent.KEYCODE_TV_INPUT && inputsAvailable) {
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) showInputs();
+            return true;
+        }
         // Vendor keys (TCL Netflix button, 4062) never reach the key services, only the focused window, so their
         // "hold:" entries run here too or nowhere. Only while resumed: onPause releases Home's holds, and a DOWN
         // taken after that would arm one nothing releases.
@@ -1433,7 +1616,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
             int position = focusedTilePosition();
             if (position >= 0 && position < adapter.appCount()
-                    && !getPackageName().equals(adapter.packageAt(position))) {
+                    && (!getPackageName().equals(adapter.packageAt(position)) || adapter.isFolderAt(position))) {
                 if (RemoteKeys.menuReleased(event.getAction(), event.getFlags())) {
                     onTileLongPress(position, getCurrentFocus());
                 }
@@ -1456,6 +1639,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     if (down) moveBy(code);
                     return true;
                 default:
+                    if (tvos != null && ok && hoverPos >= 0) {
+                        if (!down) makeFolder(movingKey, adapter.keyAt(hoverPos));
+                        return true;
+                    }
+                    if (hoverPos >= 0 && (back || isPlayPause(code))) cancelHover();
+                    if (tvos != null && isPlayPause(code)) {
+                        // tvOS: Play/Pause is "Done", whatever is in hand is put down where it is.
+                        if (!down) endReorder();
+                        return true;
+                    }
                     if (ok || back) {
                         if (!down) drop();
                         return true;
@@ -1463,7 +1656,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     return super.dispatchKeyEvent(event);
             }
         }
-        if (back) {
+        if (back || tvos != null && isPlayPause(code)) {
             if (!down) endReorder();
             return true;
         }
@@ -1484,6 +1677,219 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return true;
         }
         return super.dispatchKeyEvent(event);   // arrows navigate; OK on a top-bar pill works as usual
+    }
+
+    private static boolean isPlayPause(int code) {
+        return code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || code == KeyEvent.KEYCODE_MEDIA_PLAY
+                || code == KeyEvent.KEYCODE_MEDIA_PAUSE;
+    }
+
+    /**
+     * tvos27 edit mode: every tile wobbles a degree or so either way, neighbours out of step, as tvOS's icons jiggle.
+     * One animator drives the rotation of the tiles on screen (a RenderNode property: no redraw of their content),
+     * the carried tile stays still, and it runs only while the mode is on. reduced_motion leaves the tiles still.
+     */
+    private void startJiggle() {
+        showEditHint(true);
+        if (jiggle != null || !animations || reducedMotion) return;
+        float amp = 1.1f;
+        jiggle = ValueAnimator.ofFloat(-1f, 1f);
+        jiggle.setDuration(150);
+        jiggle.setRepeatCount(ValueAnimator.INFINITE);
+        jiggle.setRepeatMode(ValueAnimator.REVERSE);
+        jiggle.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        jiggle.addUpdateListener(a -> {
+            float v = (float) a.getAnimatedValue();
+            for (int i = 0; i < grid.getChildCount(); i++) {
+                View item = grid.getChildAt(i);
+                View card = item.findViewById(R.id.card);
+                if (card == null) continue;
+                int pos = grid.getChildAdapterPosition(item);
+                boolean still = pos < 0 || movingKey != null && movingKey.equals(adapter.keyAt(pos));
+                card.setRotation(still ? 0f : amp * v * (pos % 2 == 0 ? 1f : -1f));
+            }
+        });
+        jiggle.start();
+    }
+
+    private void stopJiggle() {
+        showEditHint(false);
+        if (jiggle != null) {
+            jiggle.cancel();
+            jiggle = null;
+        }
+        levelTiles();
+    }
+
+    /**
+     * tvos27: every tile on screen back at rest, with the focused one keeping its focus look: no wobble angle, no
+     * parallax tilt, no hover growth. Tiles off screen are levelled when they attach again or are rebound
+     * (AppAdapter), so none comes back angled after edit mode, a trip to an app, or a scroll.
+     */
+    private void levelTiles() {
+        if (tvos == null || grid == null) return;
+        for (int i = 0; i < grid.getChildCount(); i++) levelTile(grid.getChildAt(i));
+    }
+
+    private void levelTile(View item) {
+        RecyclerView.ViewHolder h = grid.getChildViewHolder(item);
+        if (h instanceof AppAdapter.Holder) {
+            ((AppAdapter.Holder) h).level();
+        } else {
+            item.animate().cancel();
+            TvFocus.level(item);
+            item.setScaleX(1f);
+            item.setScaleY(1f);
+        }
+        // The app the carried one rests over keeps its growth while a hover is on.
+        if (hoverPos >= 0 && grid.getChildAdapterPosition(item) == hoverPos) {
+            item.setScaleX(1.08f);
+            item.setScaleY(1.08f);
+        }
+    }
+
+    /** A quiet glass capsule at the top centre while editing: how to move an app and how to finish. */
+    private void showEditHint(boolean show) {
+        if (!show) {
+            TextView h = editHint;
+            editHint = null;
+            if (h == null) return;
+            h.animate().cancel();
+            if (!animations) root.removeView(h);
+            else h.animate().alpha(0f).setDuration(TvDesign.Motion.EXIT_MS).withEndAction(() -> root.removeView(h)).start();
+            return;
+        }
+        if (editHint != null) return;
+        editHint = new TextView(this);
+        editHint.setText(R.string.tvos_edit_hint);
+        TvDesign.type(editHint, TvDesign.Type.CAPTION1);
+        editHint.setTypeface(TvDesign.font(this, TvDesign.MEDIUM));
+        editHint.setTextColor(TvDesign.Color.LABEL);
+        editHint.setBackground(LiquidGlass.control(this));
+        int padH = Math.round(TvDesign.px(this, 28)), padV = Math.round(TvDesign.px(this, 12));
+        editHint.setPadding(padH, padV, padH, padV);
+        editHint.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        lp.topMargin = Math.round(TvDesign.px(this, TvDesign.Layout.SAFE_TOP));
+        root.addView(editHint, lp);
+        editHint.setAlpha(0f);
+        editHint.animate().alpha(1f).setDuration(TvMotion.ms(TvDesign.Motion.ENTER_MS, reducedMotion))
+                .setInterpolator(TvMotion.easeOut()).start();
+    }
+
+    // ---- folders (tvos27) -----------------------------------------------------------------------
+
+    /**
+     * The carried app was put down on another: the two become a folder in the other's place, or the carried app joins
+     * the folder it was put on. Edit mode ends, and the new folder opens with its name ready to change.
+     */
+    private void makeFolder(String carried, String target) {
+        handler.removeCallbacks(commitHover);
+        hoverPos = -1;
+        if (carried == null || target == null || carried.equals(target) || Folders.idOf(carried) != null) {
+            drop();   // folders don't go in folders
+            return;
+        }
+        List<Folders.Folder> folders = Folders.load(this);
+        boolean fresh = Folders.idOf(target) == null;
+        Folders.Folder f = Folders.join(folders, carried, target, Folders.newId());
+        if (f == null) {
+            drop();
+            return;
+        }
+        Folders.save(this, folders);
+        String folderKey = Folders.key(this, f.id);
+        List<String> keys = adapter.movableKeys();
+        int carriedAt = keys.indexOf(carried);
+        keys.set(keys.indexOf(target), folderKey);
+        keys.remove(carried);
+        movingKey = null;
+        endReorder();
+        int docked = savedDocked();
+        if (docked > 0 && carriedAt >= 0 && carriedAt < docked) docked--;
+        saveOrderKeys(keys, docked);
+        lastFocusedKey = folderKey;
+        reloadApps(false);
+        String id = f.id;
+        grid.post(() -> openFolder(id, fresh));
+    }
+
+    private int savedDocked() {
+        Order o = Order.load(Order.file(this));
+        return Order.docked(o, dockApps);
+    }
+
+    /** Saves Home's tile order as these keys (folders included), as reorder mode does, for the next reload. */
+    private void saveOrderKeys(List<String> keys, int docked) {
+        Order order = new Order(Order.dockKey(dockApps), keys, Math.min(docked, keys.size()));
+        if (Order.save(Order.file(this), order)) {
+            adapter.setSavedOrder(Order.ranks(order, dockApps), Order.docked(order, dockApps));
+        } else {
+            Toast.makeText(this, R.string.reorder_not_saved, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    public void onOpenFolder(String folderId) {
+        openFolder(folderId, false);
+    }
+
+    private void openFolder(String id, boolean rename) {
+        if (id == null || folderSheet != null || adapter.folderApps(id).isEmpty()) return;
+        Folders.Folder f = Folders.find(Folders.load(this), id);
+        String name = f == null || f.name.isEmpty() ? getString(R.string.tvos_folder_default) : f.name;
+        folderSheet = new FolderSheet(this, adapter, id, name, tvos, animations, reducedMotion, new FolderSheet.Host() {
+            @Override
+            public void onFolderRenamed(String folderId, String newName) {
+                List<Folders.Folder> all = Folders.load(MainActivity.this);
+                if (!Folders.rename(all, folderId, newName)) return;
+                Folders.save(MainActivity.this, all);
+                reloadTiles();
+            }
+
+            @Override
+            public void onFolderAppRemoved(String folderId, String appKey) {
+                List<Folders.Folder> all = Folders.load(MainActivity.this);
+                if (Folders.find(all, folderId) == null) return;
+                boolean gone = Folders.removeApp(all, folderId, appKey);
+                Folders.save(MainActivity.this, all);
+                // Back on Home right after its folder (or in the folder's place once the folder is empty).
+                String folderKey = Folders.key(MainActivity.this, folderId);
+                List<String> keys = adapter.movableKeys();
+                int at = keys.indexOf(folderKey);
+                int docked = savedDocked();
+                if (at < 0) {
+                    keys.add(appKey);
+                } else if (gone) {
+                    keys.set(at, appKey);
+                } else {
+                    keys.add(at + 1, appKey);
+                    if (docked > 0 && at < docked && docked < COLUMNS) docked++;
+                }
+                saveOrderKeys(keys, docked);
+                reloadTiles();
+                if (folderSheet != null) folderSheet.refresh();
+                if (gone) lastFocusedKey = appKey;
+            }
+
+            @Override
+            public void onFolderClosed(String folderId) {
+                if (openPopup == folderSheet.popup) openPopup = null;
+                folderSheet = null;
+                restoreFocus();
+            }
+        });
+        openPopup = folderSheet.popup;
+        folderSheet.show();
+        if (rename) folderSheet.focusTitle();
+    }
+
+    /** tvos27 tile menu's "Edit Home Screen": the tiles start to jiggle with focus where it was. */
+    private void startTvEdit(String key) {
+        if (!beginReorder()) return;
+        int at = adapter.positionOf(key);   // beginReorder can rebuild the tiles
+        focusTile(at >= 0 ? at : 0);
     }
 
     /** Adapter position of the focused tile, or -1 when focus is not on a tile. */
@@ -1517,6 +1923,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         orderAtStart = adapter.movableKeys();
         glass.setAccent(REORDER_ACCENT);
         btnReorder.setActivated(true);
+        if (tvos != null) startJiggle();
         return true;
     }
 
@@ -1630,12 +2037,33 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** Puts the carried tile down where it is; the mode stays on. */
     private void drop() {
+        handler.removeCallbacks(commitHover);
+        hoverPos = -1;
         movingKey = null;
         dimOthers();
     }
 
     /** While a tile is carried, every other tile is dimmed so the carried one stands out; otherwise all are full. */
     private void dimOthers() {
+        if (editHint != null) {
+            editHint.setText(hoverPos >= 0 ? R.string.tvos_edit_hint_hover
+                    : movingKey != null ? R.string.tvos_edit_hint_carry : R.string.tvos_edit_hint);
+        }
+        if (tvos != null) {
+            // The app the carried one rests over grows a little, as a folder about to form.
+            for (int i = 0; i < grid.getChildCount(); i++) {
+                View item = grid.getChildAt(i);
+                float s = hoverPos >= 0 && grid.getChildAdapterPosition(item) == hoverPos ? 1.08f : 1f;
+                if (item.getScaleX() != s) {
+                    if (animations) item.animate().scaleX(s).scaleY(s).setDuration(TvDesign.Motion.FOCUS_MS)
+                            .setInterpolator(TvMotion.easeOut()).start();
+                    else {
+                        item.setScaleX(s);
+                        item.setScaleY(s);
+                    }
+                }
+            }
+        }
         for (int i = 0; i < grid.getChildCount(); i++) {
             View item = grid.getChildAt(i);
             item.setAlpha(tileAlpha(grid.getChildAdapterPosition(item)));
@@ -1644,6 +2072,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** A tile's alpha: dim unless it is the carried one, or, in edit-dock mode, a dock tile other than the chosen place. */
     private float tileAlpha(int pos) {
+        if (hoverPos >= 0 && pos == hoverPos) return 1f;
         if (movingKey != null) {
             return pos != RecyclerView.NO_POSITION && movingKey.equals(adapter.keyAt(pos)) ? 1f : 0.45f;
         }
@@ -1659,6 +2088,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         dockEditAppKey = null;
         drop();
         reordering = false;
+        stopJiggle();
         adapter.setReordering(false);
         glass.setAccent(festive ? festival.accentColor() : 0);
         btnReorder.setActivated(false);
@@ -1689,6 +2119,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      * and Down into a short last row lands on its last tile. Nothing moves past either end or up into the top bar.
      */
     private void moveBy(int keyCode) {
+        // tvos27: the carried app first rests over its neighbour, which Select turns into a folder; after a moment,
+        // or at the next arrow, the neighbour makes way as before.
+        if (tvos != null && hoverPos >= 0) commitHover();
         int from = adapter.positionOf(movingKey);
         int n = adapter.movableCount();
         if (from < 0 || from >= n) {
@@ -1705,6 +2138,39 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         else if (from + COLUMNS < n) to = from + COLUMNS;
         else to = from / COLUMNS < (n - 1) / COLUMNS ? n - 1 : from;
         if (to < 0 || to >= n || to == from) return;
+        if (tvos != null) {
+            hoverPos = to;
+            dimOthers();
+            handler.postDelayed(commitHover, HOVER_MS);
+            return;
+        }
+        moveTo(from, to);
+    }
+
+    /** How long the carried app rests over another before that one makes way (tvos27). */
+    private static final long HOVER_MS = 1200;
+
+    private void commitHover() {
+        handler.removeCallbacks(commitHover);
+        int to = hoverPos;
+        hoverPos = -1;
+        int from = adapter.positionOf(movingKey);
+        if (to < 0 || from < 0 || to >= adapter.movableCount()) {
+            dimOthers();
+            return;
+        }
+        moveTo(from, to);
+        dimOthers();
+    }
+
+    private void cancelHover() {
+        handler.removeCallbacks(commitHover);
+        if (hoverPos < 0) return;
+        hoverPos = -1;
+        dimOthers();
+    }
+
+    private void moveTo(int from, int to) {
         keepScroll(() -> adapter.move(from, to));
         // The owner carries this tile: where it lands decides whether it is in the dock, not dock_apps (#499).
         if (to < COLUMNS) dockInSession.add(movingKey);
@@ -1907,9 +2373,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showHero(int position, float dockTopInRoot) {
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
-        float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
+        // tvOS: the title sits at the top left of the shelf, level with the time capsule, not just above the dock.
+        float y = heroArtBack != null ? TvDesign.px(this, 70)
+                : dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
         boolean changed = !label.contentEquals(heroName.getText());
-        if (cinematic && heroArtAlpha > 0f) showHeroArt(position);
+        if (cinematic && heroArtAlpha > 0f) {
+            if (heroArtBack != null) showShelfArt(position);
+            else showHeroArt(position);
+        }
+        if (tmdbBackdrop != null) tmdbBackdrop.focus(adapter.packageAt(position));
 
         if (!animations || reducedMotion) {
             // Snap the shelf instead of sliding and fading it: each of those frames repaints the
@@ -1935,7 +2407,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             fillHero(position, label);
             hero.setY(y);
             hero.setTranslationX(0f);
-            hero.animate().alpha(1f).setDuration(260).start();
+            hero.animate().alpha(1f).setDuration(260).setInterpolator(heroArtBack != null ? TvMotion.easeOut() : null).start();
             if (ambientGlow) {
                 setAmbient(color);
                 ambient.animate().alpha(1f).setDuration(600).start();
@@ -1943,10 +2415,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             heroShown = true;
         } else if (changed) {
             if (advancedEffects) hero.animate().cancel();
-            hero.animate().alpha(0f).translationX(-12 * density).setDuration(120).withEndAction(() -> {
+            // tvOS cross-fades the shelf's title in place; the launcher's own shelf slides it a little.
+            float slide = heroArtBack != null ? 0f : 12 * density;
+            hero.animate().alpha(0f).translationX(-slide).setDuration(120).withEndAction(() -> {
                 fillHero(position, label);
                 hero.setY(y);
-                hero.setTranslationX(12 * density);
+                hero.setTranslationX(slide);
                 hero.animate().alpha(1f).translationX(0f).setDuration(200).start();
             }).start();
             if (ambientGlow && advancedEffects) {
@@ -2055,6 +2529,458 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void fadeHeroArt(int ms) {
         if (!animations) heroArt.setAlpha(heroArtAlpha);
         else heroArt.animate().alpha(heroArtAlpha).setDuration(reducedMotion ? Math.min(ms, Motion.REDUCED_MS) : ms).start();
+    }
+
+    // ---- tvOS 27 Top Shelf (design_language tvos27) ---------------------------------------------------
+
+    /**
+     * The tvOS Home: the focused top-row app's artwork fills the screen, its title sits large at the top left, and the
+     * top row rests on a glass band low on the screen. tvOS shows an app's static shelf image full screen and
+     * softened, which is what HeroArt.shelf makes from the app's banner.
+     */
+    private void setUpTvosShelf() {
+        heroArtAlpha = 1f;
+        heroDotsShown = false;
+        heroDots.setVisibility(View.GONE);
+        heroArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        heroArt.setVisibility(View.VISIBLE);
+        heroArtBack = new ImageView(this);
+        heroArtBack.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        heroArtBack.setAlpha(0f);
+        heroArtBack.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        heroArtBack.forceHasOverlappingRendering(false);
+        root.addView(heroArtBack, root.indexOfChild(heroArt),
+                new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        View scrim = findViewById(R.id.heroScrim);
+        scrim.setBackground(tvosScrim());
+        scrim.setVisibility(View.VISIBLE);
+
+        heroName.setTextSize(TypedValue.COMPLEX_UNIT_PX, TvDesign.px(this, 84));
+        heroName.setTypeface(TvDesign.font(this, TvDesign.BOLD));
+        heroName.setLetterSpacing(-0.01f);
+        heroName.setShadowLayer(TvDesign.px(this, 24), 0f, TvDesign.px(this, 2), TvDesign.Color.SHADOW);
+        TvDesign.type(heroMeta, TvDesign.Type.CALLOUT);
+        heroMeta.setTextColor(0xCCFFFFFF);
+        heroMeta.setShadowLayer(TvDesign.px(this, 12), 0f, 0f, TvDesign.Color.SHADOW);
+        FrameLayout.LayoutParams hlp = (FrameLayout.LayoutParams) hero.getLayoutParams();
+        hlp.leftMargin = Math.round(TvDesign.px(this, TvDesign.Layout.SAFE_SIDE));
+        hero.setLayoutParams(hlp);
+        // The top left stays empty: no app name or "Last opened" line over the shelf, only the capsules at the right.
+        hero.setVisibility(View.GONE);
+
+        // The dock: one floating Liquid Glass platter around the top row, inset from the edges with even padding
+        // round the tiles, as tvOS 26 Home's. One drawable (tint, top sheen, rim), no blur.
+        dockBand = new View(this);
+        dockBand.setBackground(null);   // placeDockBand sets the glass once the tiles' size is known
+        dockBand.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        dockBand.setVisibility(View.INVISIBLE);
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(1, 1);
+        root.addView(dockBand, root.indexOfChild(hero), blp);
+        root.getViewTreeObserver().addOnPreDrawListener(() -> {
+            if (grid != null) placeDockBand();
+            return true;
+        });
+    }
+
+    // ---- full-screen backdrop (tvos27) ------------------------------------------------------------
+
+    /**
+     * Up from the dock over a TMDB backdrop: the dock, the rows under it and the time capsule fade away and sink a
+     * little, leaving the backdrop and its logo, as tvOS's "swipe up for full screen". Focus stays on the tile, out of
+     * sight, so any key brings everything back exactly as it was. Rotation slows down meanwhile.
+     */
+    private void enterFullBackdrop() {
+        if (fullBackdrop) return;
+        fullBackdrop = true;
+        tmdbBackdrop.setFull(true);
+        hideFullHint(true);
+        View content = findViewById(R.id.content);
+        float sink = TvDesign.px(this, 48);
+        int ms = TvMotion.ms(TvDesign.Motion.ENTER_MS, reducedMotion);
+        for (View v : new View[]{content, dockBand}) {
+            v.animate().cancel();
+            if (!animations) {
+                v.setAlpha(0f);
+                continue;
+            }
+            v.animate().alpha(0f).setDuration(ms).setInterpolator(TvMotion.easeInOut()).start();
+        }
+        if (animations) content.animate().translationY(sink);
+        else content.setTranslationY(sink);
+    }
+
+    /**
+     * Back from full screen: the dock and rows rise back into place with focus where it was. capsule: Up asked for
+     * the time capsule, so focus goes there as the top bar comes back.
+     */
+    private void exitFullBackdrop(boolean animate, boolean capsule) {
+        if (!fullBackdrop) return;
+        fullBackdrop = false;
+        if (tmdbBackdrop != null) tmdbBackdrop.setFull(false);
+        View content = findViewById(R.id.content);
+        int ms = TvMotion.ms(TvDesign.Motion.ENTER_MS, reducedMotion);
+        for (View v : new View[]{content, dockBand}) {
+            v.animate().cancel();
+            if (!animate || !animations) {
+                v.setAlpha(1f);
+                v.setTranslationY(v == content ? 0f : v.getTranslationY());
+                continue;
+            }
+            v.animate().alpha(1f).setDuration(ms).setInterpolator(TvMotion.easeOut()).start();
+        }
+        if (animate && animations) content.animate().translationY(0f);
+        else content.setTranslationY(0f);
+        if (capsule && tvCapsule != null && tvCapsule.getVisibility() == View.VISIBLE) tvCapsule.requestFocus();
+    }
+
+    /**
+     * Keys in full screen. Volume and mute pass through and leave the picture up; any other key brings Home back and
+     * is eaten, down and up, so OK does not open the app and Back does not leave. Up goes on to the time capsule.
+     */
+    private boolean fullBackdropKey(KeyEvent event) {
+        int code = event.getKeyCode();
+        if (fullExitKey != KeyEvent.KEYCODE_UNKNOWN && code == fullExitKey) {
+            if (event.getAction() == KeyEvent.ACTION_UP) fullExitKey = KeyEvent.KEYCODE_UNKNOWN;
+            return true;
+        }
+        if (!fullBackdrop) return false;
+        if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN
+                || code == KeyEvent.KEYCODE_VOLUME_MUTE || code == KeyEvent.KEYCODE_HOME) return false;
+        if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+        fullExitKey = code;
+        if (tvos != null) NavSound.move(root);
+        exitFullBackdrop(true, code == KeyEvent.KEYCODE_DPAD_UP);
+        return true;
+    }
+
+    /**
+     * The first time a backdrop takes over Home, a quiet "Press ▲ for full screen" sits under the dock for a few
+     * seconds, as tvOS hints at its full-screen Top Shelf. Never again once shown.
+     */
+    private void maybeShowFullHint() {
+        if (fullBackdrop || fullHint != null || dockBand == null || lastFocused >= COLUMNS) return;
+        android.content.SharedPreferences prefs = getSharedPreferences("tvos27", MODE_PRIVATE);
+        if (prefs.getBoolean(PREF_FULL_HINT, false)) return;
+        prefs.edit().putBoolean(PREF_FULL_HINT, true).apply();
+        fullHint = new TextView(this);
+        fullHint.setText(R.string.tvos_full_screen_hint);
+        TvDesign.type(fullHint, TvDesign.Type.CAPTION1);
+        fullHint.setTypeface(TvDesign.font(this, TvDesign.MEDIUM));
+        fullHint.setTextColor(builtLight ? TvDesign.Color.SECONDARY : 0xB3FFFFFF);
+        if (!builtLight) fullHint.setShadowLayer(TvDesign.px(this, 10), 0f, 0f, 0x80000000);
+        fullHint.setGravity(Gravity.CENTER);
+        fullHint.setAlpha(0f);
+        fullHint.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+        lp.topMargin = Math.round(dockBand.getTranslationY() + dockBand.getHeight() + TvDesign.px(this, 10));
+        root.addView(fullHint, lp);
+        fullHint.animate().alpha(1f).setStartDelay(600).setDuration(TvMotion.ms(TvDesign.Motion.ENTER_MS, reducedMotion))
+                .setInterpolator(TvMotion.easeOut()).start();
+        root.postDelayed(() -> hideFullHint(true), 6000);
+    }
+
+    private void hideFullHint(boolean animate) {
+        TextView h = fullHint;
+        if (h == null || h.getParent() == null) return;
+        h.animate().cancel();
+        if (!animate || !animations) {
+            root.removeView(h);
+            return;
+        }
+        h.animate().alpha(0f).setStartDelay(0).setDuration(TvDesign.Motion.EXIT_MS)
+                .withEndAction(() -> root.removeView(h)).start();
+    }
+
+    /** Keeps the dock's glass round the top row, at the tiles' resting size, wherever the grid has scrolled it. */
+    private void placeDockBand() {
+        View first = null;
+        int left = Integer.MAX_VALUE, right = Integer.MIN_VALUE;
+        Rect r = bandRect;
+        for (int i = 0; i < grid.getChildCount(); i++) {
+            View child = grid.getChildAt(i);
+            int pos = grid.getChildAdapterPosition(child);
+            if (pos < 0 || pos >= COLUMNS) continue;
+            View card = child.findViewById(R.id.card);
+            if (card == null || card.getHeight() <= 0) continue;
+            r.set(0, 0, card.getWidth(), card.getHeight());
+            root.offsetDescendantRectToMyCoords(card, r);
+            if (first == null) first = card;
+            left = Math.min(left, r.left);
+            right = Math.max(right, r.right);
+        }
+        if (first == null) {
+            dockBand.setVisibility(View.INVISIBLE);
+            return;
+        }
+        r.set(0, 0, first.getWidth(), first.getHeight());
+        root.offsetDescendantRectToMyCoords(first, r);
+        // The padding on every side (a gap plus a focused tile's growth); corners concentric with the tiles'.
+        int pad = Math.round(TvDesign.px(this, TvDesign.Layout.dockPad(COLUMNS)));
+        int w = right - left + 2 * pad, h = r.height() + 2 * pad;
+        float radius = TvDesign.Radius.dock(first.getWidth(), pad);
+        if (radius != dockRadius) {
+            dockRadius = radius;
+            dockBand.setBackground(new LiquidGlass(radius, TvDesign.px(this, TvDesign.Glass.RIM)));
+        }
+        ViewGroup.LayoutParams lp = dockBand.getLayoutParams();
+        if (lp.height != h || lp.width != w) {
+            lp.width = w;
+            lp.height = h;
+            dockBand.setLayoutParams(lp);
+        }
+        dockBand.setTranslationX(left - pad);
+        dockBand.setTranslationY(r.top - pad + ((View) first.getParent()).getTranslationY()
+                + ((View) grid.getParent().getParent()).getTranslationY());
+        if (dockBand.getVisibility() != View.VISIBLE) dockBand.setVisibility(View.VISIBLE);
+        // The logo rests on the dock's left edge, a gutter above it (its baked shadow pads it a little); it stays put
+        // while the dock is away in full screen. Only while the dock is parked on the top row.
+        if (tmdbLogo != null && !fullBackdrop && tmdbLogo.getHeight() > 0 && lastFocused < COLUMNS) {
+            // Margins, not translation: the logo's own fade rides on translationY.
+            int lx = left - pad, ly = Math.round(r.top - pad - TvDesign.px(this, 36)) - tmdbLogo.getHeight();
+            FrameLayout.LayoutParams llp = (FrameLayout.LayoutParams) tmdbLogo.getLayoutParams();
+            if (llp.leftMargin != lx || llp.topMargin != ly) {
+                llp.leftMargin = lx;
+                llp.topMargin = ly;
+                tmdbLogo.setLayoutParams(llp);
+            }
+        }
+    }
+
+    private final Rect bandRect = new Rect();
+    /** The dock glass's corner radius in pixels, concentric with the tiles; 0 until the first layout. */
+    private float dockRadius;
+
+    /** Darkens the top for the title and the time, and the bottom under the rows; the middle shows the artwork. */
+    private Drawable tvosScrim() {
+        int w = 480, h = 270;
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bmp);
+        Paint paint = new Paint();
+        paint.setShader(new LinearGradient(0, 0, w, 0,
+                new int[]{TvDesign.scrim(builtLight ? 0x40 : 0x73), TvDesign.scrim(0)}, new float[]{0f, 0.5f},
+                Shader.TileMode.CLAMP));
+        canvas.drawRect(0, 0, w, h, paint);
+        // Light keeps the artwork and washes it with light grey where the glass and dark text sit, not black.
+        paint.setShader(new LinearGradient(0, 0, 0, h,
+                new int[]{TvDesign.scrim(builtLight ? 0x4D : 0x66), TvDesign.scrim(0), TvDesign.scrim(0),
+                        TvDesign.scrim(builtLight ? 0x73 : 0x59), TvDesign.scrim(builtLight ? 0xD9 : 0xCC)},
+                new float[]{0f, 0.3f, 0.62f, 0.86f, 1f}, Shader.TileMode.CLAMP));
+        canvas.drawRect(0, 0, w, h, paint);
+        BitmapDrawable scrim = new BitmapDrawable(getResources(), bmp);
+        scrim.setGravity(Gravity.FILL);
+        return scrim;
+    }
+
+    /**
+     * Cross-fades the shelf to this app's artwork: the old image stays underneath while the new one fades in over it
+     * and settles from a slight zoom, as the tvOS shelf does when focus moves along the top row.
+     */
+    private void showShelfArt(int position) {
+        String key = adapter.keyAt(position);
+        if (key == null) return;
+        // This app's TMDB backdrop already covers the shelf: the gradient stays hidden under it, not drawn twice.
+        if (tmdbBackdrop != null && tmdbBackdrop.covers(adapter.packageAt(position))) return;
+        root.removeCallbacks(coverWallpaper);
+        root.postDelayed(coverWallpaper, TvMotion.ms(TvDesign.Motion.SHELF_FADE_MS, reducedMotion) + 50);
+        heroArt.animate().cancel();
+        heroArtBack.animate().cancel();
+        int ms = TvMotion.ms(TvDesign.Motion.SHELF_FADE_MS, reducedMotion);
+        View scrim = findViewById(R.id.heroScrim);
+        if (scrim.getAlpha() < 1f) {
+            scrim.animate().cancel();
+            if (!animations) scrim.setAlpha(1f);
+            else scrim.animate().alpha(1f).setDuration(ms).setInterpolator(TvMotion.easeOut()).start();
+        }
+        // Leaving a TMDB backdrop: put the new gradient in fully opaque under it and let only the backdrop fade.
+        // Fading both at once leaves both half transparent mid-way, and Home's background flashes through.
+        boolean underBackdrop = tmdbBackdrop != null && tmdbBackdrop.onTop()
+                && heroArt.getTranslationY() == 0f;
+        if (underBackdrop) {
+            Bitmap under = key.equals(heroArtKey) ? null : heroArtCache.get(key);
+            if (!key.equals(heroArtKey)) {
+                if (under == null) {
+                    under = HeroArt.shelf(adapter.artworkAt(position));
+                    if (under != null) heroArtCache.put(key, under);
+                }
+                heroArt.setImageBitmap(under);
+                heroArtKey = key;
+            }
+            heroArtBack.setAlpha(0f);
+            heroArt.setAlpha(1f);
+            heroArt.setScaleX(1f);
+            heroArt.setScaleY(1f);
+            return;
+        }
+        if (key.equals(heroArtKey)) {
+            // Back up from the grid: the shelf slides down into place again.
+            heroArtBack.setAlpha(0f);
+            if (!animations) {
+                heroArt.setAlpha(1f);
+                heroArt.setTranslationY(0f);
+                heroArt.setScaleX(1f);
+                heroArt.setScaleY(1f);
+            } else {
+                heroArt.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(ms)
+                        .setInterpolator(TvMotion.easeOut()).start();
+            }
+            return;
+        }
+        Bitmap art = heroArtCache.get(key);
+        if (art == null) {
+            art = HeroArt.shelf(adapter.artworkAt(position));
+            if (art != null) heroArtCache.put(key, art);
+        }
+        heroArtKey = key;
+        if (!animations || reducedMotion || heroArt.getAlpha() == 0f) {
+            heroArtBack.setAlpha(0f);
+            heroArt.setImageBitmap(art);
+            heroArt.setScaleX(1f);
+            heroArt.setScaleY(1f);
+            heroArt.setTranslationY(0f);
+            if (!animations) heroArt.setAlpha(1f);
+            else heroArt.animate().alpha(1f).setDuration(ms).setInterpolator(TvMotion.easeOut()).start();
+            return;
+        }
+        heroArtBack.setImageDrawable(heroArt.getDrawable());
+        heroArtBack.setAlpha(heroArt.getAlpha());
+        heroArtBack.setTranslationY(heroArt.getTranslationY());
+        heroArtBack.setScaleX(heroArt.getScaleX());
+        heroArtBack.setScaleY(heroArt.getScaleY());
+        heroArt.setImageBitmap(art);
+        heroArt.setAlpha(0f);
+        heroArt.setScaleX(1.04f);
+        heroArt.setScaleY(1.04f);
+        heroArt.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f).setDuration(ms)
+                .setInterpolator(TvMotion.easeOut()).withEndAction(() -> heroArtBack.setAlpha(0f)).start();
+    }
+
+    /** Once the shelf is fully in, the wallpaper under it stops drawing: one full-screen layer instead of two. */
+    private final Runnable coverWallpaper = () -> {
+        if (heroArt.getAlpha() >= 1f && heroArt.getTranslationY() == 0f) wallpaperPlayer.setCovered(true);
+    };
+
+    /**
+     * Focus moved down into the grid: the shelf's gradient (or TMDB backdrop) lifts away and fades out, uncovering
+     * Home's own background, the wallpaper or background_color, the way tvOS shows its wallpaper behind all apps.
+     * Coming back to the top row fades the shelf back in (showShelfArt).
+     */
+    private void leaveShelf() {
+        root.removeCallbacks(coverWallpaper);
+        wallpaperPlayer.setCovered(false);   // under the shelf until now; the shelf fades off it
+        if (tmdbBackdrop != null) tmdbBackdrop.leave(TvDesign.Motion.ENTER_MS);
+        heroArtBack.animate().cancel();
+        heroArtBack.setAlpha(0f);
+        View scrim = findViewById(R.id.heroScrim);
+        scrim.animate().cancel();
+        // Grown as it lifts, so its lower edge never comes into view.
+        float lift = -TvDesign.px(this, 120), grow = 1.25f;
+        if (!animations || reducedMotion) {
+            hero.setAlpha(0f);
+            heroArt.setAlpha(0f);
+            scrim.setAlpha(0f);
+            heroArt.setTranslationY(lift);
+            heroArt.setScaleX(grow);
+            heroArt.setScaleY(grow);
+            return;
+        }
+        hero.animate().alpha(0f).setDuration(TvDesign.Motion.EXIT_MS).setInterpolator(TvMotion.easeOut()).start();
+        scrim.animate().alpha(0f).setDuration(TvDesign.Motion.ENTER_MS).setInterpolator(TvMotion.easeInOut()).start();
+        heroArt.animate().alpha(0f).translationY(lift).scaleX(grow).scaleY(grow).setDuration(TvDesign.Motion.ENTER_MS)
+                .setInterpolator(TvMotion.easeInOut()).start();
+    }
+
+    /**
+     * tvOS keeps the top of Home quiet: no large clock or date, only a small glass time capsule at the top right after
+     * the glass buttons, all inside the safe area.
+     */
+    private void setUpTvosTopBar(LinearLayout bar) {
+        clockBlock.setVisibility(View.GONE);
+        RelativeLayout.LayoutParams lp = (RelativeLayout.LayoutParams) bar.getLayoutParams();
+        lp.removeRule(RelativeLayout.ALIGN_BOTTOM);
+        lp.removeRule(RelativeLayout.ALIGN_TOP);
+        lp.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+        lp.bottomMargin = 0;
+        bar.setLayoutParams(lp);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        View content = findViewById(R.id.content);
+        int gridPad = grid.getPaddingLeft();
+        // The dock's padding less half a gap inside the safe area: tiles sit centred in their cells, so the outer tiles
+        // stand the padding in from it, and the glass round them ends exactly at the safe area.
+        int side = Math.max(0, Math.round(TvDesign.px(this, TvDesign.Layout.SAFE_SIDE
+                + TvDesign.Layout.dockPad(COLUMNS) - TvDesign.Layout.dockGap(COLUMNS) / 2f)) - gridPad);
+        content.setPadding(side, Math.round(TvDesign.px(this, TvDesign.Layout.SAFE_TOP)), side, content.getPaddingBottom());
+        // The grid's wrapper clips at its edges so scrolled rows never draw over the top bar. Sideways that also cut a
+        // focused end tile's shadow off in a hard line at the safe area (a slab down the screen in Light): clip at the
+        // top and bottom only, across the whole screen.
+        ViewGroup wrapper = (ViewGroup) grid.getParent();
+        wrapper.setClipChildren(false);
+        wrapper.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            int screen = root.getWidth() > 0 ? root.getWidth() : getResources().getDisplayMetrics().widthPixels;
+            v.setClipBounds(new Rect(-l, 0, screen - l, b - t));
+        });
+
+        // Only one control up here, as on tvOS: the time capsule with the account's avatar in it. Selecting it opens
+        // Control Center, where Settings and the rest live; the other pills stay hidden.
+        showInputsPill = false;
+        for (int k = 0; k < bar.getChildCount(); k++) bar.getChildAt(k).setVisibility(View.GONE);
+        tvosTopBar = true;
+
+        LinearLayout capsule = new LinearLayout(this);
+        capsule.setOrientation(LinearLayout.HORIZONTAL);
+        capsule.setGravity(Gravity.CENTER_VERTICAL);
+        capsule.setBackground(LiquidGlass.control(this));
+        capsule.setFocusable(true);
+        capsule.setClickable(true);
+        capsule.setContentDescription(getString(R.string.settings));
+        int height = Math.round(TvDesign.px(this, 72));
+        int inset = Math.round(TvDesign.px(this, 7));
+        capsule.setPadding(Math.round(TvDesign.px(this, 26)), inset, inset, inset);
+        capsule.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View v, Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), v.getHeight() / 2f);
+            }
+        });
+
+        tvClock = new TextClock(this);
+        tvClock.setFormat12Hour("h:mm a");
+        tvClock.setAllCaps(true);   // "AM"/"PM" even where the locale writes "am"/"pm" (en-GB)
+        tvClock.setFormat24Hour("HH:mm");
+        ClockFormat.apply(tvClock, clockFormat);
+        TvDesign.type(tvClock, TvDesign.Type.CALLOUT);
+        tvClock.setTextColor(new ColorStateList(new int[][]{{android.R.attr.state_focused}, {}},
+                new int[]{TvDesign.Glass.FOCUSED_TEXT, TvDesign.Color.LABEL}));
+        tvClock.setDuplicateParentStateEnabled(true);
+        tvClock.setIncludeFontPadding(false);
+        capsule.addView(tvClock, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        SleepTimer.addMoon(capsule, Math.round(TvDesign.px(this, 26)), Math.round(TvDesign.px(this, 10)));
+
+        ImageView avatar = new ImageView(this);
+        avatar.setImageDrawable(GoogleAccount.avatar(this, GoogleAccount.cached()));
+        int size = height - 2 * inset;
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(size, size);
+        alp.leftMargin = Math.round(TvDesign.px(this, 16));
+        capsule.addView(avatar, alp);
+        GoogleAccount.load(this, false, address -> avatar.setImageDrawable(GoogleAccount.avatar(this, address)));
+        tvAvatar = avatar;
+        tvCapsule = capsule;
+        home = new java.lang.ref.WeakReference<>(this);
+
+        capsule.setOnClickListener(v -> open(new Intent(this, QuickSettingsActivity.class)));
+        capsule.setOnFocusChangeListener((v, f) -> TvFocus.focus(v, f, tvos));
+        capsule.setOnKeyListener((v, keyCode, event) -> {
+            TvFocus.key(v, event, tvos);
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
+                return true;
+            }
+            return keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                    || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
+        });
+        bar.addView(capsule, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, height));
     }
 
     /** "Last opened yesterday, 9:40 PM", the time in white; nothing (but the same height) when it was never seen. */
@@ -2189,9 +3115,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         stopAmbientAnimation();
         hero.animate().cancel();
         ambient.animate().cancel();
-        hero.setAlpha(0f);
         heroArt.animate().cancel();
-        heroArt.setAlpha(0f);
+        if (heroArtBack != null) {
+            leaveShelf();
+        } else {
+            hero.setAlpha(0f);
+            heroArt.setAlpha(0f);
+        }
         heroShown = false;
         if (!ambientGlow) return;
         if (!animations || reducedMotion) {
@@ -2452,7 +3382,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
+            if (position < COLUMNS) {
+                // tvos27: over a TMDB backdrop, Up lifts the dock away and shows the picture full screen; Up again
+                // from there reaches the time capsule. Over the gradient Up goes straight to the capsule.
+                if (tmdbBackdrop != null && !reordering && tmdbBackdrop.showing()) {
+                    enterFullBackdrop();
+                    return true;
+                }
+                return false;          // dock row: let focus move to the top bar
+            }
             target = position - COLUMNS;
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
@@ -2463,9 +3401,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             target = Math.min(position + COLUMNS, count - 1);
         }
         focusTile(target);
-        // The default focus search clicks for Left/Right; Up/Down are handled here, so click for them too.
-        grid.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_UP
-                ? SoundEffectConstants.NAVIGATION_UP : SoundEffectConstants.NAVIGATION_DOWN);
+        // The default focus search clicks for Left/Right; Up/Down are handled here, so click for them too. tvos27's
+        // NavSound ticks on the focus change itself.
+        if (tvos == null) {
+            grid.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_UP
+                    ? SoundEffectConstants.NAVIGATION_UP : SoundEffectConstants.NAVIGATION_DOWN);
+        }
         return true;
     }
 
@@ -2706,7 +3647,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void updateClockVisibility() {
         boolean valid = System.currentTimeMillis() >= TIME_VALID_AFTER_MS;
-        clockBlock.setVisibility(valid ? View.VISIBLE : View.INVISIBLE);
+        if (tvClock != null) {
+            clockBlock.setVisibility(View.GONE);
+            tvClock.setVisibility(valid ? View.VISIBLE : View.GONE);
+        } else {
+            clockBlock.setVisibility(valid ? View.VISIBLE : View.INVISIBLE);
+        }
         handler.removeCallbacks(clockCheck);
         if (valid) {
             updateGreeting();
@@ -3157,6 +4103,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** vpn_pill: the pill outlined in green with a lock while a VPN is up, outlined in red "VPN off" while it is not;
      *  solid with a white ring only while focused. */
     private void updateVpnPill(boolean vpn) {
+        if (tvosTopBar) return;
         int state = VpnBadge.pillState(vpn, vpnAppIntent() != null);
         if (state == VpnBadge.PILL_HIDDEN) {
             if (btnVpn.getVisibility() == View.GONE) return;
@@ -3199,7 +4146,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** Hides the Inputs pill when it would have nothing to list: streaming boxes have no HDMI-in, AV or tuner. */
     private void updateInputsButton() {
-        if (!showInputsPill) {
+        if (!showInputsPill && tvos == null) {
             btnInputs.setVisibility(View.GONE);
             return;
         }
@@ -3215,7 +4162,41 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 }
             }
         }
-        btnInputs.setVisibility(any ? View.VISIBLE : View.GONE);
+        inputsAvailable = any;
+        btnInputs.setVisibility(any && showInputsPill ? View.VISIBLE : View.GONE);
+    }
+
+    /**
+     * tvos27: fades the time capsule out while Control Center ({@code controlCenter}) or the Inputs panel covers the
+     * top right, so it never shows through the glass, and back in once neither does.
+     */
+    private void setTopBarCovered(boolean covered, boolean controlCenter) {
+        if (controlCenter) ccCovers = covered;
+        else inputsCover = covered;
+        // The Inputs panel takes Control Center's place when opened from its tile.
+        if (!controlCenter && covered) ccCovers = false;
+        if (tvCapsule == null) return;
+        float to = ccCovers || inputsCover ? 0f : 1f;
+        tvCapsule.animate().cancel();
+        if (!animations || !resumed && to == 0f) {
+            tvCapsule.setAlpha(to);
+            return;
+        }
+        tvCapsule.animate().alpha(to).setDuration(TvMotion.ms(to == 0f ? TvDesign.Motion.UNFOCUS_MS
+                : TvDesign.Motion.FOCUS_MS, reducedMotion)).setInterpolator(TvMotion.easeInOut()).start();
+    }
+
+    /** Control Center opening ({@code true}) or closing, from QuickSettingsActivity. */
+    static void controlCenterShown(boolean shown) {
+        MainActivity a = home.get();
+        if (a != null && !a.isDestroyed()) a.setTopBarCovered(shown, true);
+    }
+
+    /** Back in the Inputs panel opened from Control Center: Control Center again, with its Inputs tile focused. */
+    private void backToControlCenter() {
+        setTopBarCovered(true, true);
+        open(new Intent(this, QuickSettingsActivity.class).putExtra(QuickSettingsActivity.EXTRA_FOCUS_INPUTS, true));
+        overridePendingTransition(0, 0);
     }
 
     /** boot_to_live_tv, or the Open on start app: the first time Home comes up after the TV starts, open that app
@@ -3398,14 +4379,63 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Read the switch, not the pill: show_inputs_pill=false hides the pill too, and there the list
         // keeps its usual place.
         boolean underGear = topMenu;
-        View anchor = findViewById(underGear ? R.id.btnSettings : R.id.btnInputs);
-        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
-        LinearLayout rows = panel.findViewById(R.id.rows);
+        View anchor = null, panel = null;
+        LinearLayout rows;
+        int width = 0;
+        final PopupWindow popup;
+        // design_language tvos27: the same rows, drawn as a Control Center sub-panel (TvosInputs).
+        TvosInputs sheet = null;
+        if (tvos != null) {
+            if (inputsSheet != null) inputsSheet.dismiss();
+            boolean fromCc = inputsFromCc;
+            inputsFromCc = false;
+            sheet = new TvosInputs(this, tvos, fromCc, this::backToControlCenter, () -> {
+                inputsSheet = null;
+                setTopBarCovered(false, false);
+            });
+            rows = sheet.rows;
+            popup = null;
+        } else {
+            anchor = findViewById(underGear ? R.id.btnSettings : R.id.btnInputs);
+            panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+            rows = panel.findViewById(R.id.rows);
 
-        // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
-        int width = Math.max(anchor.getWidth(), (int) (150 * density));
-        final PopupWindow popup = glassPopup(panel, width);
+            // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
+            width = Math.max(anchor.getWidth(), (int) (150 * density));
+            popup = glassPopup(panel, width);
+        }
+        buildingSheet = sheet;
+        try {
+            fillInputs(rows, popup, coocaa);
+        } finally {
+            buildingSheet = null;
+        }
+        if (rows.getChildCount() == 0) {
+            if (popup != null) popup.dismiss();
+            Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (sheet != null) {
+            inputsSheet = sheet;
+            setTopBarCovered(true, false);
+            sheet.show();
+            return;
+        }
 
+        // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
+
+        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
+        dropIn(popup, panel, anchor, alignment);
+        for (int i = 0; i < rows.getChildCount(); i++) {
+            View child = rows.getChildAt(i);
+            if (child.getVisibility() == View.VISIBLE && child.isFocusable()) { child.requestFocus(); break; }
+        }
+    }
+
+    /** The Inputs rows, into {@code rows}: the popup's, or the tvos27 panel's while buildingSheet is set. */
+    private void fillInputs(LinearLayout rows, PopupWindow popup, List<CoocaaSources.Source> coocaa) {
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         // inputs_connected_only: ports without a connected device and the AV jacks fold behind a "More inputs" row.
         boolean connectedOnly = inputsConnectedOnly;
@@ -3517,7 +4547,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 if (connectedOnly && InputFold.folds(hdmi, state)) fold(row, folded);
             }
         }
-        if (!folded.isEmpty()) {
+        if (!folded.isEmpty() && buildingSheet != null) {
+            buildingSheet.more(folded);
+        } else if (!folded.isEmpty()) {
             View more = getLayoutInflater().inflate(R.layout.item_input, rows, false);
             ((ImageView) more.findViewById(R.id.icon)).setImageResource(R.drawable.ic_input);
             ((TextView) more.findViewById(R.id.title)).setText(R.string.more_inputs);
@@ -3578,21 +4610,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             final Intent liveTvIntent = liveTv;
             addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTvIntent));
         }
-        if (rows.getChildCount() == 0) {
-            Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
-        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
-
-        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
-        dropIn(popup, panel, anchor, alignment);
-        for (int i = 0; i < rows.getChildCount(); i++) {
-            View child = rows.getChildAt(i);
-            if (child.getVisibility() == View.VISIBLE && child.isFocusable()) { child.requestFocus(); break; }
-        }
     }
 
     private static void fold(View view, List<View> folded) {
@@ -3625,6 +4642,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private View addSeparator(LinearLayout rows) {
+        if (buildingSheet != null) return buildingSheet.separator();
         View line = new View(this);
         line.setBackgroundColor(0x1FFFFFFF);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) density);
@@ -3635,6 +4653,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private View addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
+        if (buildingSheet != null) return buildingSheet.row(iconRes, title, state, action);
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         ((ImageView) row.findViewById(R.id.icon)).setImageResource(iconRes);
         ((TextView) row.findViewById(R.id.title)).setText(title);
@@ -3820,12 +4839,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (reordering || openPopup != null) return;
         String key = adapter.keyAt(position);
         String pkg = adapter.packageAt(position);
+        if (tvos != null && adapter.isFolderAt(position)) {
+            showFolderMenu(position, key, card);
+            return;
+        }
         // Empty dock slots and the Default-home tile carry the launcher's own package: no menu for them.
         if (key == null || pkg == null || pkg.equals(getPackageName())) return;
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
-        if (dockRow && position < adapter.movableCount()) {
+        if (tvos != null) {
+            // tvOS's context menu: Edit Home Screen, Move, Hide, then App info, on a Liquid Glass platter.
+            panel.setBackground(LiquidGlass.platter(this));
+            int pad = Math.round(TvDesign.px(this, 14));
+            panel.setPadding(pad, pad, pad, pad);
+            if (position < adapter.movableCount()) {
+                addSettingsMenuRow(rows, popup, R.string.tvos_edit_home, () -> startTvEdit(key));
+            }
+        } else if (dockRow && position < adapter.movableCount()) {
             boolean inDock = position < COLUMNS;
             addSettingsMenuRow(rows, popup, inDock ? R.string.tile_replace_in_dock : R.string.tile_add_to_dock,
                     () -> startDockEditFor(key, inDock));
@@ -3836,9 +4867,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (at < 0) return;
             focusTile(at);
             pickUp(at);
-            Toast.makeText(this, R.string.reorder_hint, Toast.LENGTH_LONG).show();
+            if (tvos == null) Toast.makeText(this, R.string.reorder_hint, Toast.LENGTH_LONG).show();
         });
-        if (appLibraryEnabled) addSettingsMenuRow(rows, popup, R.string.library_remove_shortcut, () -> {
+        if (appLibraryEnabled) addSettingsMenuRow(rows, popup,
+                tvos != null ? R.string.tvos_hide : R.string.library_remove_shortcut, () -> {
             if (LibraryApps.save(this, pkg, false)) reloadApps(false);
             else Toast.makeText(this, R.string.library_save_failed, Toast.LENGTH_LONG).show();
         });
@@ -3865,12 +4897,41 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
+    /** tvos27: a folder's menu: Edit Home Screen, Move and Rename Folder. */
+    private void showFolderMenu(int position, String key, View card) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (200 * density));
+        panel.setBackground(LiquidGlass.platter(this));
+        int pad = Math.round(TvDesign.px(this, 14));
+        panel.setPadding(pad, pad, pad, pad);
+        addSettingsMenuRow(rows, popup, R.string.tvos_edit_home, () -> startTvEdit(key));
+        addSettingsMenuRow(rows, popup, R.string.tile_move, () -> {
+            if (!beginReorder()) return;
+            int at = adapter.positionOf(key);
+            if (at < 0) return;
+            focusTile(at);
+            pickUp(at);
+        });
+        addSettingsMenuRow(rows, popup, R.string.tvos_folder_rename, () -> openFolder(Folders.idOf(key), true));
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
+        int[] at = new int[2];
+        card.getLocationInWindow(at);
+        int gap = (int) (10 * density), height = panel.getMeasuredHeight();
+        if (at[1] + card.getHeight() + gap + height <= root.getHeight()) dropIn(popup, panel, card, Gravity.START);
+        else popup.showAtLocation(root, Gravity.NO_GRAVITY, at[0], Math.max(0, at[1] - gap - height));
+        rows.getChildAt(0).requestFocus();
+    }
+
     private void addSettingsMenuRow(LinearLayout rows, PopupWindow popup, int title, Runnable action) {
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         row.findViewById(R.id.icon).setVisibility(View.GONE);
         row.findViewById(R.id.dot).setVisibility(View.GONE);
         row.findViewById(R.id.status).setVisibility(View.GONE);
         ((TextView) row.findViewById(R.id.title)).setText(title);
+        if (tvos != null) ((TextView) row.findViewById(R.id.title)).setTextColor(new ColorStateList(
+                new int[][]{{android.R.attr.state_focused}, {}}, new int[]{TvDesign.Glass.FOCUSED_TEXT, TvDesign.Color.LABEL}));
         row.setOnClickListener(v -> {
             popup.dismiss();
             action.run();

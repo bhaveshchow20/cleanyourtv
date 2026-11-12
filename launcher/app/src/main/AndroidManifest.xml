@@ -8,7 +8,11 @@
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Local tvOS 27 fork only: the TMDB Top Shelf backdrop (Tmdb.java) when config.json has a tmdb_key. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- tvos27 Control Center's sleep timer: on time with exact alarms where allowed, else within a window. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Needed since Android 10 to read the Wi-Fi network name for the network pill. Never requested at
          runtime: build-and-install grants it with pm grant, so lint's Android 12 "ask for COARSE with
          FINE" rule does not apply here. -->
@@ -28,6 +32,16 @@
         <!-- The standard settings handlers, so package visibility doesn't hide them and send the pills to a vendor fallback by mistake. -->
         <intent>
             <action android:name="android.settings.SETTINGS" />
+        </intent>
+        <!-- tvos27 profile row (GoogleAccount): Google TV's profile switcher, then the TV's account settings. -->
+        <intent>
+            <action android:name="com.google.android.gms.account.ProfilePickerDelegation" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.SYNC_SETTINGS" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.ADD_ACCOUNT_SETTINGS" />
         </intent>
         <intent>
             <action android:name="android.settings.WIFI_SETTINGS" />
@@ -65,6 +79,14 @@
         <package android:name="com.xiaomi.mitv.settings" />
         <package android:name="com.tcl.settings" />
         <package android:name="com.amazon.tv.launcher" />
+        <!-- tvos27: resolve-checked before use, so a build without them falls back instead of failing.
+             The Sleep Timer's screensaver (SystemUI's Somnambulator), the TV settings app's account screens
+             (GoogleAccount), and Now Playing's notification access screen. -->
+        <package android:name="com.android.systemui" />
+        <package android:name="com.android.tv.settings" />
+        <intent>
+            <action android:name="android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS" />
+        </intent>
         <!-- Coocaa OS sources for the Inputs menu (coocaa_sources); see CoocaaSources. -->
         <provider android:authorities="com.skyworth.tv.provider" />
         <provider android:authorities="com.skyworth.tv.sdk.provider" />
@@ -251,6 +273,22 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/input_key_service" />
+        </service>
+
+        <!-- tvos27 Control Center: the sleep timer's backstop alarm, and the listener Now Playing needs to read
+             media sessions (it reads no notification and unbinds itself).
+             cmd notification allow_listener com.gathin.tvhome/.NowPlayingListener -->
+        <receiver
+            android:name=".SleepTimer$Alarm"
+            android:exported="false" />
+        <service
+            android:name=".NowPlayingListener"
+            android:exported="true"
+            android:label="@string/tvos_now_playing"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
     </application>
 </manifest>

@@ -63,10 +63,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void onLibraryUp();
         /** A tile whose launch_actions entry is "input:<id>": switch to that TV input instead of opening an app. */
         void onOpenInput(String inputId);
+        /** design_language tvos27: a folder tile was selected. */
+        void onOpenFolder(String folderId);
     }
 
     static final class Entry {
-        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, EMPTY = 3;
+        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, EMPTY = 3, FOLDER = 4;
 
         final int kind;
         final String label;
@@ -155,7 +157,18 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      */
     static int tileWidthPx(int innerWidthPx, int gridHeightPx, int columns, int rowsBelowDock, boolean dockTitle,
                            boolean dockRow, float density) {
-        int w = tileWidthPx(innerWidthPx, columns, density);
+        return tileWidthPx(innerWidthPx, gridHeightPx, columns, rowsBelowDock, dockTitle, dockRow, density, 0);
+    }
+
+    /**
+     * The same with tvos27's even spacing: with {@code gapPx} > 0 each tile is its cell less one gap, so neighbours
+     * sit exactly one gap apart (TvDesign.Layout.dockGap); the focus zoom's room is in the gap already.
+     */
+    static int tileWidthPx(int innerWidthPx, int gridHeightPx, int columns, int rowsBelowDock, boolean dockTitle,
+                           boolean dockRow, float density, int gapPx) {
+        int w = gapPx > 0 && innerWidthPx > 0 && columns > 0
+                ? Math.max(Math.round(80 * density), innerWidthPx / columns - gapPx)
+                : tileWidthPx(innerWidthPx, columns, density);
         if (gridHeightPx <= 0 || rowsBelowDock <= 0) return w;
         float reserved = (dockRow ? DOCK_EXTRA_DP + BOTTOM_ROOM_DP + (dockTitle ? TITLE_ROOM_DP : 0)
                 : TOP_ROOM_DP + COMPACT_BOTTOM_ROOM_DP) * density;
@@ -210,6 +223,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final boolean reducedMotion;
     /** The focus zoom may overshoot (config.xml, focus_overshoot). */
     private final boolean focusOvershoot;
+    /** design_language tvos27: tiles take the shared tvOS focus effect (TvFocus); null keeps the launcher's own. */
+    private final TvFocus.Spec tvos;
     /** Package to the action its tile sends instead of the start screen (config.xml, launch_actions). */
     private final Map<String, String> launchActions;
     /** Hold OK opens the activity's tile menu (config.xml, tile_menu); false opens App info, as before. */
@@ -221,6 +236,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Packages drawn from their icon and name even when they have a banner (config.xml icon_tiles). */
     private final Set<String> iconTiles;
     private final List<Entry> items = new ArrayList<>();
+    /** design_language tvos27: each folder's apps, in the folder's order, by folder id. */
+    private final Map<String, List<Entry>> folderApps = new HashMap<>();
 
     AppAdapter(Context ctx, TileListener listener, int dockSize, Config cfg) {
         this.ctx = ctx;
@@ -236,6 +253,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.showLibrary = LibraryApps.showPill(cfg.appLibrary, cfg.libraryButton, cfg.showLibraryPill);
         this.reducedMotion = cfg.reducedMotion;
         this.focusOvershoot = cfg.focusOvershoot;
+        this.tvos = cfg.tvos27() ? TvFocus.Spec.of(cfg) : null;
         this.rowsBelowDock = cfg.rowsBelowDock;
         this.dockTitle = cfg.dockTitle;
         this.dockRow = cfg.dockRow;
@@ -311,6 +329,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 fresh.add(new Entry(label, component, banner, icon));
             }
         }
+        if (tvos != null) gatherFolders(fresh);
         Collections.sort(fresh, (a, b) -> {
             // The owner's own order first; tiles it does not know (new installs) follow by the rule below.
             int saved = Order.compare(savedRanks, a.component.flattenToShortString(), b.component.flattenToShortString());
@@ -343,6 +362,95 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         items.clear();
         items.addAll(fresh);
         notifyDataSetChanged();
+    }
+
+    /**
+     * tvos27 folders: apps in a folder leave the grid and their folder's tile stands in for them, at the folder's
+     * saved place. A folder none of whose apps are installed shows no tile.
+     */
+    private void gatherFolders(List<Entry> fresh) {
+        folderApps.clear();
+        List<Folders.Folder> folders = Folders.load(ctx);
+        if (folders.isEmpty()) return;
+        Map<String, Entry> byKey = new HashMap<>();
+        for (Entry e : fresh) byKey.put(e.component.flattenToShortString(), e);
+        for (Folders.Folder f : folders) {
+            List<Entry> apps = new ArrayList<>();
+            for (String key : f.apps) {
+                Entry e = byKey.remove(key);
+                if (e != null) apps.add(e);
+            }
+            if (apps.isEmpty()) continue;
+            fresh.removeAll(apps);
+            folderApps.put(f.id, apps);
+            String name = f.name.isEmpty() ? ctx.getString(R.string.tvos_folder_default) : f.name;
+            fresh.add(new Entry(Entry.FOLDER, name, new ComponentName(ctx, Folders.CLASS_PREFIX + f.id),
+                    folderBanner(apps), null, null, 0));
+        }
+    }
+
+    /** A folder's tile: up to nine of its apps in a 3x3 mini-grid on dark glass, as tvOS draws a folder. */
+    private Drawable folderBanner(List<Entry> apps) {
+        int w = 320, h = 180, pad = 14, gap = 6;
+        float cellH = (h - 2f * pad - 2f * gap) / 3f, cellW = cellH * 16f / 9f;
+        float left = (w - 3 * cellW - 2 * gap) / 2f;
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bmp);
+        android.graphics.Paint fill = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        fill.setShader(new android.graphics.LinearGradient(0, 0, 0, h, TvDesign.Color.CARD_TOP, TvDesign.Color.CARD_BOTTOM,
+                android.graphics.Shader.TileMode.CLAMP));
+        canvas.drawRect(0, 0, w, h, fill);
+        fill.setShader(null);
+        android.graphics.Path clip = new android.graphics.Path();
+        android.graphics.RectF cell = new android.graphics.RectF();
+        for (int i = 0; i < 9; i++) {
+            float x = left + (i % 3) * (cellW + gap), y = pad + (i / 3) * (cellH + gap);
+            cell.set(x, y, x + cellW, y + cellH);
+            if (i >= apps.size()) {
+                fill.setColor(TvDesign.Color.FILL);
+                canvas.drawRoundRect(cell, 6, 6, fill);
+                continue;
+            }
+            Entry e = apps.get(i);
+            canvas.save();
+            clip.reset();
+            clip.addRoundRect(cell, 6, 6, android.graphics.Path.Direction.CW);
+            canvas.clipPath(clip);
+            Drawable art = e.banner != null ? e.banner : e.icon;
+            if (e.banner == null) {
+                fill.setColor(0xFF15202B);
+                canvas.drawRect(cell, fill);
+            }
+            if (art != null) {
+                Drawable d = art.getConstantState() != null ? art.getConstantState().newDrawable().mutate() : art;
+                Rect saved = new Rect(d.getBounds());
+                if (e.banner != null) {
+                    d.setBounds(Math.round(cell.left), Math.round(cell.top), Math.round(cell.right), Math.round(cell.bottom));
+                } else {
+                    int side = Math.round(cellH * 0.7f), cx = Math.round(cell.centerX()), cy = Math.round(cell.centerY());
+                    d.setBounds(cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2);
+                }
+                d.draw(canvas);
+                d.setBounds(saved);
+            }
+            canvas.restore();
+        }
+        return new android.graphics.drawable.BitmapDrawable(ctx.getResources(), bmp);
+    }
+
+    /** The apps in a tvos27 folder, in order, or an empty list. */
+    List<Entry> folderApps(String id) {
+        List<Entry> apps = folderApps.get(id);
+        return apps == null ? Collections.emptyList() : apps;
+    }
+
+    boolean isFolderAt(int position) {
+        return position >= 0 && position < items.size() && items.get(position).kind == Entry.FOLDER;
+    }
+
+    /** Opens an app tile's app, as selecting its tile does (a folder's apps open from its sheet). */
+    void open(Entry e) {
+        launch(e);
     }
 
     /** icon_tiles: the app's icon centred on a dark banner-shaped tile, for apps whose own banner crops badly. */
@@ -415,7 +523,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         float density = parent.getResources().getDisplayMetrics().density;
         int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
         int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
-        int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
+        int gap = tvos != null ? Math.round(TvDesign.px(parent.getContext(), TvDesign.Layout.dockGap(dockSize))) : 0;
+        int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density, gap),
+                h = tileHeightPx(w);
         View card = v.findViewById(R.id.card);
         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
         cardLp.width = w;
@@ -452,7 +562,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             View label = v.findViewById(R.id.label);
             label.setPadding(label.getPaddingLeft(), label.getPaddingTop(), label.getPaddingRight(), Math.round(4f * density));
         }
-        return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot);
+        return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot, tvos);
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull RecyclerView.ViewHolder holder) {
+        if (tvos != null && holder instanceof Holder) ((Holder) holder).level();
     }
 
     @Override
@@ -474,6 +589,14 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         h.card.setVisibility(View.VISIBLE);
         h.card.setFocusable(true);
+        h.card.setRotation(0f);   // a view recycled mid-jiggle (tvos27 edit mode)
+        if (tvos != null) {
+            // and anything else edit mode or a parallax nudge may have left on it
+            h.itemView.animate().cancel();
+            TvFocus.level(h.itemView);
+            h.itemView.setScaleX(1f);
+            h.itemView.setScaleY(1f);
+        }
         h.name.setText(e.name);
         // The dock has no labels, unless always_show_names asks for them (DockDecoration then makes room in the band).
         // In a single row every tile is the dock's kind: the big title above names it.
@@ -482,12 +605,19 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         h.inDock = dockKind;
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
         h.name.setAlpha(focused ? 1f : restNameAlpha);
-        h.card.setScaleX(focused && animations ? focusScale() : 1f);
-        h.card.setScaleY(focused && animations ? focusScale() : 1f);
-        h.card.setTranslationY(focused && advancedEffects && !dockKind ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.card.setTranslationZ(focused && advancedEffects ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.banner.setScaleX(focused && advancedEffects ? 1.035f : 1f);
-        h.banner.setScaleY(focused && advancedEffects ? 1.035f : 1f);
+        if (tvos != null) {
+            TvFocus.snap(h.card, focused, tvos);
+            h.banner.setScaleX(1f);
+            h.banner.setScaleY(1f);
+            h.shine(focused, false);
+        } else {
+            h.card.setScaleX(focused && animations ? focusScale() : 1f);
+            h.card.setScaleY(focused && animations ? focusScale() : 1f);
+            h.card.setTranslationY(focused && advancedEffects && !dockKind ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
+            h.card.setTranslationZ(focused && advancedEffects ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
+            h.banner.setScaleX(focused && advancedEffects ? 1.035f : 1f);
+            h.banner.setScaleY(focused && advancedEffects ? 1.035f : 1f);
+        }
         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
         h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
@@ -528,6 +658,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
     @SuppressWarnings("deprecation")
     private void launch(Entry e) {
+        if (e.kind == Entry.FOLDER) {
+            listener.onOpenFolder(Folders.idOf(e.component.flattenToShortString()));
+            return;
+        }
         if (e.kind == Entry.HOME_SETTINGS) {
             ctx.startActivity(new Intent(ctx, HomeSettingsActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -554,7 +688,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         try {
             ctx.startActivity(i);
             if (cinematic) LastOpened.record(ctx, e.pkg);
-            if (advancedEffects && !reducedMotion && ctx instanceof Activity) {
+            if (tvos != null && ctx instanceof Activity) {
+                TvMotion.open((Activity) ctx, animations, reducedMotion);
+            } else if (advancedEffects && !reducedMotion && ctx instanceof Activity) {
                 ((Activity) ctx).overridePendingTransition(R.anim.app_open_enter, R.anim.app_open_exit);
             }
         } catch (Exception ex) {
@@ -676,6 +812,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     float focusScale() {
+        if (tvos != null) return animations ? TvDesign.Focus.SCALE : 1f;
         return !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
     }
 
@@ -913,18 +1050,83 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         /** Alpha of the name while the tile is not focused (always_show_names). */
         final float restNameAlpha;
         final boolean overshoot;
+        /** design_language tvos27's focus effect, or null for the launcher's own. */
+        final TvFocus.Spec tvos;
         /** A dock tile: it grows in place without advanced_effects' lift, which reads as off-centre in the band (#2135). */
         boolean inDock;
+        /** tvos27: 0 at rest (dimmed, no rim) to 1 focused (full brightness, light rim); see {@link #shine}. */
+        private float shine = -1f;
+        private android.animation.ValueAnimator shineAnim;
+        private GradientDrawable rim;
+
+        /**
+         * tvos27: the focused card at full brightness with a faint light rim, the others a little dimmer
+         * (TvDesign.Focus.REST_BRIGHTNESS). A colour filter on the card's own images and a foreground stroke, so no
+         * extra layer; it animates only for the focus change and nothing redraws at rest.
+         */
+        void shine(boolean focused, boolean animate) {
+            float to = focused ? 1f : 0f;
+            if (shineAnim != null) shineAnim.cancel();
+            shineAnim = null;
+            if (!animate || shine < 0f || !animations || reducedMotion) {
+                applyShine(to);
+                return;
+            }
+            if (shine == to) return;
+            shineAnim = android.animation.ValueAnimator.ofFloat(shine, to);
+            shineAnim.setDuration(focused ? TvDesign.Motion.FOCUS_MS : TvDesign.Motion.UNFOCUS_MS);
+            shineAnim.setInterpolator(TvMotion.focusEase());
+            shineAnim.addUpdateListener(a -> applyShine((float) a.getAnimatedValue()));
+            shineAnim.start();
+        }
+
+        private void applyShine(float p) {
+            if (p == shine) return;
+            shine = p;
+            float level = TvDesign.Focus.REST_BRIGHTNESS + (1f - TvDesign.Focus.REST_BRIGHTNESS) * p;
+            android.graphics.ColorFilter f = null;
+            if (level < 0.999f) {
+                int c = Math.round(255 * level);
+                f = new android.graphics.LightingColorFilter(0xFF000000 | c << 16 | c << 8 | c, 0);
+            }
+            banner.setColorFilter(f);
+            icon.setColorFilter(f);
+            if (p <= 0f) {
+                if (card.getForeground() != null) card.setForeground(null);
+                return;
+            }
+            if (rim == null) {
+                rim = new GradientDrawable();
+                rim.setColor(0);
+                rim.setStroke(Math.max(1, Math.round(TvDesign.px(card.getContext(), TvDesign.Focus.RIM_W))), 0xFFFFFFFF);
+            }
+            rim.setCornerRadius(TvDesign.Radius.card(card.getWidth()));
+            rim.setAlpha(Math.round(TvDesign.Focus.RIM_ALPHA * p));
+            if (card.getForeground() != rim) card.setForeground(rim);
+        }
+
+        /** A recycled or reattached tile back at rest: no wobble, tilt or hover growth left from edit mode. */
+        void level() {
+            card.animate().cancel();
+            TvFocus.snap(card, card.isFocused(), tvos);
+            itemView.animate().cancel();
+            TvFocus.level(itemView);
+            itemView.setScaleX(1f);
+            itemView.setScaleY(1f);
+            shine(card.isFocused(), false);
+        }
 
         Holder(View v, TileListener listener, boolean animations, boolean advancedEffects,
-               boolean reducedMotion, float restNameAlpha, boolean overshoot) {
+               boolean reducedMotion, float restNameAlpha, boolean overshoot, TvFocus.Spec tvos) {
             super(v);
+            this.tvos = tvos;
             card = v.findViewById(R.id.card);
             cardBackground = card.getBackground();
             banner = v.findViewById(R.id.banner);
             icon = v.findViewById(R.id.icon);
             label = v.findViewById(R.id.label);
             name = v.findViewById(R.id.name);
+            if (tvos != null) name.setTextColor(TvDesign.Color.LABEL);
             this.animations = animations;
             this.advancedEffects = advancedEffects;
             this.reducedMotion = reducedMotion;
@@ -936,12 +1138,14 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 @Override
                 public void getOutline(View view, Outline outline) {
                     // 16dp at the design width, scaled down with the tile so small tiles keep the same shape.
-                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadius(view.getWidth(), density));
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), tvos != null
+                            ? TvDesign.Radius.card(view.getWidth()) : cornerRadius(view.getWidth(), density));
                 }
             });
             card.setClipToOutline(true);
 
             card.setOnKeyListener((view, keyCode, event) -> {
+                if (tvos != null) TvFocus.key(view, event, tvos);
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
                 if (keyCode != KeyEvent.KEYCODE_DPAD_UP && keyCode != KeyEvent.KEYCODE_DPAD_DOWN
                         && keyCode != KeyEvent.KEYCODE_DPAD_LEFT && keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
@@ -955,7 +1159,18 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 name.animate().cancel();
                 float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
                 float s = focused ? scale : 1f;
-                if (!animations) {
+                if (tvos != null) {
+                    TvFocus.focus(view, focused, tvos);
+                    shine(focused, true);
+                    if (!animations || reducedMotion) {
+                        name.setAlpha(focused ? 1f : restNameAlpha);
+                        name.setTranslationY(focused ? density * 4f : 0f);
+                    } else {
+                        name.animate().alpha(focused ? 1f : restNameAlpha)
+                                .translationY(focused ? density * 4f : -density * 6f)
+                                .setDuration(TvDesign.Motion.FOCUS_MS).setInterpolator(TvMotion.focusEase()).start();
+                    }
+                } else if (!animations) {
                     view.setScaleX(1f);
                     view.setScaleY(1f);
                     view.setTranslationY(0f);

@@ -14,7 +14,7 @@ import androidx.recyclerview.widget.RecyclerView;
 /**
  * fade_rows: the rows fade out as they scroll up under the clock, instead of being cut off at the grid's top
  * edge. It erases the top of the grid's own picture, so whatever is behind Home (a wallpaper, the sky) shows
- * through; the grid draws into a hardware layer for that ({@link #attach}), or the erasing would punch through
+ * through; the grid draws into a hardware layer for that while scrolled ({@link #attach}), or the erasing would punch through
  * the whole window. Android's own requiresFadingEdge draws its fade in the wrong place with this grid's
  * clipChildren=false, so it is not used. The fade grows in over the first pixels of scrolling, so the dock at
  * rest is untouched.
@@ -31,8 +31,16 @@ final class TopFade extends RecyclerView.ItemDecoration {
     }
 
     static void attach(RecyclerView grid, float length) {
-        grid.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         grid.addItemDecoration(new TopFade(length));
+        // The layer only while scrolled: at rest nothing is erased, and a full-screen layer is GPU memory and an
+        // extra composite on every frame for nothing.
+        grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                int want = rv.computeVerticalScrollOffset() > 0 ? View.LAYER_TYPE_HARDWARE : View.LAYER_TYPE_NONE;
+                if (rv.getLayerType() != want) rv.setLayerType(want, null);
+            }
+        });
     }
 
     /** How tall the fade is after scrolling {@code scrolled} pixels: nothing at rest, then up to {@code length}. */

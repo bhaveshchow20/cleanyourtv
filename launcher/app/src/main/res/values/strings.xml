@@ -66,6 +66,37 @@
     <string name="advanced_effects_warning">Adds a lifted tile, icon zoom and smooth colour transitions. May increase memory use; the actual difference depends on your TV.</string>
     <string name="follow_theme">Follow theme (reset on-TV choices)</string>
     <string name="follow_theme_hint">Uses the current theme or built-in layout and motion settings. Pushing or resetting a theme also clears your on-TV choices.</string>
+    <!-- tvOS 27 settings (design_language tvos27): section headers and the bare Animations row label. -->
+    <string name="tvos_section_home">Home Screen</string>
+    <string name="tvos_section_appearance">Appearance</string>
+    <string name="tvos_section_general">General</string>
+    <string name="tvos_animations">Animations</string>
+    <string name="tvos_appearance">Appearance</string>
+    <string name="tvos_appearance_dark">Dark</string>
+    <string name="tvos_appearance_light">Light</string>
+    <string name="tvos_appearance_auto">Automatic</string>
+    <string name="tvos_appearance_help">Light frosted glass with dark text, or the dark look. Home, Control Center and Settings change at once.</string>
+    <string name="tvos_appearance_auto_help">Light from sunrise to sunset and dark at night, or light whenever the TV\'s own setting is light.</string>
+    <string name="tvos_account">Google account</string>
+    <string name="tvos_account_switch">Switch account</string>
+    <string name="tvos_account_choose">Choose account</string>
+    <string name="tvos_sleep">Sleep</string>
+    <string name="tvos_sleep_timer">Sleep Timer</string>
+    <string name="tvos_timer">Timer</string>
+    <string name="tvos_off">Off</string>
+    <string name="tvos_minutes">%d minutes</string>
+    <string name="tvos_sleep_in">In %d min</string>
+    <string name="tvos_sleep_left">%d min left</string>
+    <string name="tvos_sleep_short">%d min</string>
+    <string name="tvos_sleep_helper">Sleep needs the launcher\'s Home button helper: turn it on in TV Settings &gt; Accessibility</string>
+    <string name="tvos_launcher">Launcher</string>
+    <string name="tvos_now_playing">Now Playing</string>
+    <string name="tvos_now_playing_access">Allow notification access to show it</string>
+    <string name="tvos_now_playing_adb">Allow it in Settings &gt; Apps &gt; Special app access &gt; Notification access, or: adb shell cmd notification allow_listener com.gathin.tvhome/.NowPlayingListener</string>
+    <string name="tvos_play">Play</string>
+    <string name="tvos_pause">Pause</string>
+    <string name="tvos_previous">Previous</string>
+    <string name="tvos_next">Next</string>
     <string name="tv_settings">TV system settings</string>
     <string name="quick_picture">Display</string>
     <string name="quick_network">Network</string>
@@ -106,6 +137,15 @@
     <string name="dock_edit_pick_place">Choose the dock place for this app and press OK. Back to cancel.</string>
     <string name="reorder">Reorder apps</string>
     <string name="tile_move">Move</string>
+    <string name="tvos_edit_home">Edit Home Screen</string>
+    <string name="tvos_hide">Hide from Home</string>
+    <string name="tvos_edit_hint_carry">Arrows move it · Select to put it down</string>
+    <string name="tvos_edit_hint_hover">Select to make a folder · arrows to keep moving</string>
+    <string name="tvos_folder_default">Folder</string>
+    <string name="tvos_folder_rename">Rename Folder</string>
+    <string name="tvos_folder_move_out">Move to Home Screen</string>
+    <string name="tvos_edit_hint">Select to move an app · Play/Pause when done</string>
+    <string name="tvos_full_screen_hint">Press ▲ for full screen</string>
     <string name="reorder_hint">OK picks up an app, arrows move it, Back places it. Back again to finish.</string>
     <string name="reorder_not_saved">Couldn\'t save the new order</string>
     <string name="app_library">App library</string>
@@ -158,4 +198,41 @@
     <string name="clock_format_system">System</string>
     <string name="clock_format_12">12-hour</string>
     <string name="clock_format_24">24-hour</string>
+    <!-- tvos27 Settings, Wallpaper: photos sent from a phone (PhoneUpload). -->
+    <string name="wallpaper_phone_photos">Phone photos</string>
+    <plurals name="phone_photo_count">
+        <item quantity="one">%1$d photo</item>
+        <item quantity="other">%1$d photos</item>
+    </plurals>
+    <string name="wallpaper_from_phone_section">From your phone</string>
+    <string name="wallpaper_choose_phone">Choose from phone…</string>
+    <string name="wallpaper_choose_phone_help">Send photos from Google Photos or your phone\'s gallery. No sign-in: your phone and this TV only need to be on the same Wi-Fi.</string>
+    <string name="wallpaper_choose_phone_title">Send photos from your phone</string>
+    <string name="wallpaper_remove_phone">Remove phone photos</string>
+    <string name="wallpaper_remove_phone_message">The photos sent from your phone are deleted from this TV.</string>
+    <string name="remove">Remove</string>
+    <string name="done">Done</string>
+    <string name="phone_sheet_steps">Scan the code with your phone\'s camera, or open this address in its browser, then choose photos. They replace the last photos you sent.</string>
+    <string name="phone_sheet_offline">Connect the TV to Wi-Fi or Ethernet first. Your phone needs to be on the same network.</string>
+    <string name="phone_sheet_waiting">Waiting for photos…</string>
+    <plurals name="phone_photos_received">
+        <item quantity="one">%1$d photo received</item>
+        <item quantity="other">%1$d photos received</item>
+    </plurals>
+    <plurals name="phone_sheet_done">
+        <item quantity="one">%1$d photo received. Press Done to use it as the wallpaper.</item>
+        <item quantity="other">%1$d photos received. Press Done to use them as the wallpaper.</item>
+    </plurals>
+    <string name="phone_sheet_nothing">Nothing arrived. Send JPEG, PNG or WebP photos.</string>
+    <!-- tvos27 Settings, General: NavSound. -->
+    <string name="navigation_sounds">Navigation sounds</string>
+    <string name="navigation_sounds_help">A soft click when you move between items and select one. Where the TV\'s own system sounds are on, the TV plays its own instead.</string>
+    <!-- The page a phone opens to send photos to the TV (PhoneUpload); %1$d and %2$d are filled in on the phone. -->
+    <string name="phone_page_title">Send photos to TV</string>
+    <string name="phone_page_heading">Send photos to your TV</string>
+    <string name="phone_page_body">Pick up to %1$d photos. They replace the last photos you sent and become the TV\'s wallpaper.</string>
+    <string name="phone_page_choose">Choose photos</string>
+    <string name="phone_page_sending">Sending %1$s of %2$s…</string>
+    <string name="phone_page_sent">%1$s sent. Look at your TV.</string>
+    <string name="phone_page_nothing">Nothing was sent. Use JPEG, PNG or WebP photos.</string>
 </resources>

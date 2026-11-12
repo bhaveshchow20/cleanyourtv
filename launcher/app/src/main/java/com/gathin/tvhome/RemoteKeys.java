@@ -162,6 +162,37 @@ final class RemoteKeys {
         return found;
     }
 
+    /** True for a gamepad button pressed on a game controller: the key goes to the app, never to app_keys. */
+    static boolean passThrough(int keyCode, int deviceSources) {
+        // KeyEvent.isGamepadButton's two ranges, spelt out so the JVM tests can run it.
+        boolean button = keyCode >= KeyEvent.KEYCODE_BUTTON_A && keyCode <= KeyEvent.KEYCODE_BUTTON_MODE
+                || keyCode >= KeyEvent.KEYCODE_BUTTON_1 && keyCode <= KeyEvent.KEYCODE_BUTTON_16;
+        return button && GamepadPassthrough.isGamepad(deviceSources);
+    }
+
+    /** The package a target opens, or null when it is not an app: an action word, Inputs or a TV input. */
+    static String targetPackage(String target) {
+        if (target == null || target.isEmpty() || isAction(target) || INPUTS.equals(target) || inputId(target) != null) {
+            return null;
+        }
+        String guide = guidePackage(target);
+        if (guide != null) return guide;
+        int slash = target.indexOf('/');
+        return slash < 0 ? target : target.substring(0, slash);
+    }
+
+    /** False only for an app target whose package is not installed; null stays null for the caller. */
+    private static boolean installed(Context ctx, String target) {
+        String pkg = targetPackage(target);
+        if (target == null || pkg == null) return true;
+        try {
+            ctx.getPackageManager().getApplicationInfo(pkg, 0);
+            return true;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
     /** The package of a "guide:<package>" target, or null for any other target. */
     static String guidePackage(String target) {
         if (target == null || !target.startsWith("guide:")) return null;
@@ -187,6 +218,14 @@ final class RemoteKeys {
      * normal one on an earlier release. False means neither list has this key, so the caller can pass it on.
      */
     static boolean handle(Context ctx, KeyEvent event, String app, String holdApp) {
+        if (app == null && holdApp == null) return false;
+        // A game controller's own buttons are never remote shortcuts: KEYCODE_BUTTON_3 (190) is a TCL remote's
+        // YouTube key and also every controller's third face button.
+        android.view.InputDevice device = event.getDevice();
+        if (passThrough(event.getKeyCode(), device == null ? 0 : device.getSources())) return false;
+        // An entry for an app that is not on this TV (another brand's app_keys) leaves the key to the TV.
+        if (!installed(ctx, app)) app = null;
+        if (!installed(ctx, holdApp)) holdApp = null;
         if (app == null && holdApp == null) return false;
         if (presses == null) {
             Handler handler = new Handler(Looper.getMainLooper());

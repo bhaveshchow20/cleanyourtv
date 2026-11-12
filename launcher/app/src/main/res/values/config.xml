@@ -541,6 +541,16 @@
          faint outer glow), rim (the crisp rim alone, no sheen, fill or glow, for a quiet focus over a wallpaper) or
          halo (the rim with a lighter outer glow). Can also be set with "glass_style": "rim" in a theme's config.json. -->
     <string name="glass_style" translatable="false">glass</string>
+    <!-- The design language Home is drawn in: default (the launcher's own look) or tvos27 (Apple tvOS 27: the
+         focused tile grows and rises on a soft shadow with no glass slab over it, Select presses it down, the top
+         bar's buttons are Liquid Glass capsules that turn white when focused, and apps open with a zoom). Screens
+         redesigned for tvOS 27 build on the shared TvDesign, TvFocus, LiquidGlass and TvMotion classes
+         (docs/themes/tvos27.md). Can also be set with "design_language": "tvos27" in a theme's config.json. -->
+    <string name="design_language" translatable="false">default</string>
+    <!-- With design_language tvos27: a D-pad press tilts the focused tile towards that direction and a specular
+         highlight slides across it, the tvOS parallax. Off by default; a weak GPU can leave it off. Can also be
+         set with "focus_parallax" in a theme's config.json. -->
+    <bool name="focus_parallax">false</bool>
 
     <!-- Tiles drawn from the app's icon and name instead of its banner (for banners that crop badly). -->
     <string-array name="icon_tiles" translatable="false">

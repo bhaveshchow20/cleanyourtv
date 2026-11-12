@@ -1,0 +1,63 @@
+{
+  "_comment": "Debug fixture for the TMDB Top Shelf. 'providers' is a US snapshot of /watch/providers that apps are matched against by label (TmdbMatch); lists are keyed by the matched provider ids, '*' for any other match.",
+  "providers": [
+    {"provider_id": 8, "provider_name": "Netflix", "display_priority": 0},
+    {"provider_id": 9, "provider_name": "Amazon Prime Video", "display_priority": 1},
+    {"provider_id": 337, "provider_name": "Disney Plus", "display_priority": 2},
+    {"provider_id": 15, "provider_name": "Hulu", "display_priority": 3},
+    {"provider_id": 1899, "provider_name": "HBO Max", "display_priority": 4},
+    {"provider_id": 350, "provider_name": "Apple TV+", "display_priority": 5},
+    {"provider_id": 531, "provider_name": "Paramount Plus", "display_priority": 6},
+    {"provider_id": 386, "provider_name": "Peacock Premium", "display_priority": 7},
+    {"provider_id": 387, "provider_name": "Peacock Premium Plus", "display_priority": 8},
+    {"provider_id": 1796, "provider_name": "Netflix Standard with Ads", "display_priority": 9},
+    {"provider_id": 2100, "provider_name": "Amazon Prime Video with Ads", "display_priority": 10},
+    {"provider_id": 73, "provider_name": "Tubi TV", "display_priority": 11},
+    {"provider_id": 300, "provider_name": "Pluto TV", "display_priority": 12},
+    {"provider_id": 283, "provider_name": "Crunchyroll", "display_priority": 13},
+    {"provider_id": 2, "provider_name": "Apple TV", "display_priority": 14},
+    {"provider_id": 10, "provider_name": "Amazon Video", "display_priority": 15},
+    {"provider_id": 3, "provider_name": "Google Play Movies", "display_priority": 16},
+    {"provider_id": 192, "provider_name": "YouTube", "display_priority": 17},
+    {"provider_id": 188, "provider_name": "YouTube Premium", "display_priority": 18},
+    {"provider_id": 175, "provider_name": "Netflix Kids", "display_priority": 19},
+    {"provider_id": 582, "provider_name": "Paramount+ Amazon Channel", "display_priority": 20},
+    {"provider_id": 1853, "provider_name": "Paramount Plus Apple TV Channel", "display_priority": 21},
+    {"provider_id": 2303, "provider_name": "Paramount Plus Premium", "display_priority": 22},
+    {"provider_id": 2304, "provider_name": "Paramount Plus Essential", "display_priority": 23},
+    {"provider_id": 1825, "provider_name": "HBO Max Amazon Channel", "display_priority": 24},
+    {"provider_id": 194, "provider_name": "Starz Play Amazon Channel", "display_priority": 25},
+    {"provider_id": 289, "provider_name": "Cinemax Amazon Channel", "display_priority": 26},
+    {"provider_id": 584, "provider_name": "Discovery+ Amazon Channel", "display_priority": 27},
+    {"provider_id": 520, "provider_name": "Discovery+", "display_priority": 28},
+    {"provider_id": 526, "provider_name": "AMC+", "display_priority": 29},
+    {"provider_id": 207, "provider_name": "The Roku Channel", "display_priority": 30},
+    {"provider_id": 2077, "provider_name": "Peacock Premium Plus Amazon Channel", "display_priority": 31},
+    {"provider_id": 257, "provider_name": "fuboTV", "display_priority": 32},
+    {"provider_id": 43, "provider_name": "Starz", "display_priority": 33},
+    {"provider_id": 37, "provider_name": "Showtime", "display_priority": 34},
+    {"provider_id": 11, "provider_name": "MUBI", "display_priority": 35},
+    {"provider_id": 1770, "provider_name": "Paramount+ with Showtime", "display_priority": 36},
+    {"provider_id": 7, "provider_name": "Fandango At Home", "display_priority": 37}
+  ],
+  "8|1796": [
+    {"name": "Stranger Things", "kind": "tv", "backdrop": "/56v2KjBlU4XaOv9rVYEQypROD7P.jpg", "logo": "/uyVM5qGksUzCgwo6UU0UrHex8Oj.png"},
+    {"name": "Wednesday", "kind": "tv", "backdrop": "/iHSwvRVsRyxpX7FE7GbviaDvgGZ.jpg", "logo": "/m5nR52ErmLa0fkY4ItBuYaQuXJJ.png"},
+    {"name": "Breaking Bad", "kind": "tv", "backdrop": "/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg", "logo": "/chw44B2VnLha8iiTdyZcIW0ZELC.png"},
+    {"name": "Inception", "kind": "movie", "backdrop": "/8ZTVqvKDQ8emSGUEMjsS4yHAwrp.jpg", "logo": "/eS5TjZsO30LTfZISyBbPiXshAKd.png"},
+    {"name": "The Shawshank Redemption", "kind": "movie", "backdrop": "/kXfqcdQKsToO0OUXHcrrNCHDBzO.jpg", "logo": "/1K53E8WXQW76Scg8upBObXSrbgN.png"}
+  ],
+  "337": [
+    {"name": "Avengers: Endgame", "kind": "movie", "backdrop": "/7RyHsO4yDXtBv1zUU3mTpHeQ0d5.jpg", "logo": "/gvGe333uy5FynrYAtGuQwlzzxku.png"},
+    {"name": "Interstellar", "kind": "movie", "backdrop": "/xJHokMbljvjADYdit5fK5VQsXEG.jpg", "logo": "/8G6W14aWn2jCYUADgXXwepN5tgv.png"}
+  ],
+  "1899": [
+    {"name": "The Dark Knight", "kind": "movie", "backdrop": "/nMKdUUepR0i5zn0y1T4CsSB5chy.jpg", "logo": "/nO5Uix3Qr4WjOyU1BMPv0okyNWm.png"},
+    {"name": "Inception", "kind": "movie", "backdrop": "/8ZTVqvKDQ8emSGUEMjsS4yHAwrp.jpg", "logo": "/eS5TjZsO30LTfZISyBbPiXshAKd.png"}
+  ],
+  "*": [
+    {"name": "The Godfather", "kind": "movie", "backdrop": "/rSPw7tgCH9c6NqICZef4kZjFOQ5.jpg", "logo": "/kysDTCloxUPJ1BILI4f8gs74fcr.png"},
+    {"name": "Breaking Bad", "kind": "tv", "backdrop": "/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg", "logo": "/chw44B2VnLha8iiTdyZcIW0ZELC.png"},
+    {"name": "Fight Club", "kind": "movie", "backdrop": "/hZkgoQYus5vegHoetLkCJzb17zJ.jpg", "logo": "/7Uqhv24pGJs4Ns31NoOPWFJGWNG.png"}
+  ]
+}

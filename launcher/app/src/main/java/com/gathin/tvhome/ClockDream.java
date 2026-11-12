@@ -9,15 +9,22 @@ import android.service.dreams.DreamService;
 public class ClockDream extends DreamService {
 
     private ClockScene scene;
+    /** design_language tvos27: the Aerial-style screensaver in the clock's place. */
+    private AerialScene aerial;
 
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
         setInteractive(false);   // any key wakes the TV back to where it was
         setFullscreen(true);
-        setScreenBright(false);
-        setContentView(R.layout.dream_clock);
-        ClockFormat.apply(getWindow().getDecorView(), Config.load(this).clockFormat);
+        Config cfg = Config.load(this);
+        setScreenBright(cfg.tvos27());   // an Aerial is meant to be seen; the clock dims the screen
+        setContentView(cfg.tvos27() ? R.layout.dream_aerial : R.layout.dream_clock);
+        ClockFormat.apply(getWindow().getDecorView(), cfg.clockFormat);
+        if (cfg.tvos27()) {
+            aerial = new AerialScene(getWindow().getDecorView(), cfg);
+            return;
+        }
         scene = new ClockScene(getWindow().getDecorView());
         scene.useHomeWallpaper(this);
     }
@@ -25,18 +32,21 @@ public class ClockDream extends DreamService {
     @Override
     public void onDreamingStarted() {
         super.onDreamingStarted();
-        scene.start();
+        if (aerial != null) aerial.start();
+        else scene.start();
     }
 
     @Override
     public void onDreamingStopped() {
-        scene.stop();
+        if (aerial != null) aerial.stop();
+        else scene.stop();
         super.onDreamingStopped();
     }
 
     @Override
     public void onDetachedFromWindow() {
         if (scene != null) scene.stop();
+        if (aerial != null) aerial.stop();
         super.onDetachedFromWindow();
     }
 }

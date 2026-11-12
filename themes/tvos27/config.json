@@ -1,0 +1,44 @@
+{
+  "design_language": "tvos27",
+  "focus_parallax": true,
+  "dock_apps": [
+    "com.netflix.ninja",
+    "com.google.android.youtube.tv",
+    "com.amazon.amazonvideo.livingroom",
+    "com.disney.disneyplus"
+  ],
+  "columns": 6,
+  "dock_row": true,
+  "cinematic_home": true,
+  "cinematic_white_focus": true,
+  "dock_glass": true,
+  "ambient_glow": false,
+  "app_glow": false,
+  "focus_overshoot": false,
+  "show_greeting": false,
+  "icon_only_buttons": true,
+  "fade_rows": false,
+  "app_library": true,
+  "library_button": true,
+  "library_ok_opens": true,
+  "settings_key_panel": true,
+  "settings_key_keycodes": [
+    176,
+    83
+  ],
+  "show_library_pill": true,
+  "home_idle_clock_minutes": 10,
+  "app_keys": [
+    "4062:com.netflix.ninja",
+    "4099:com.amazon.amazonvideo.livingroom",
+    "4065:com.google.android.youtube.tv",
+    "190:com.google.android.youtube.tv",
+    "4160:com.apple.atve.androidtv.appletv",
+    "4184:com.tcl.tv.plus",
+    "4020:com.tcl.tv.plus",
+    "313:com.tcl.tv.plus",
+    "297:com.tcl.tv.plus",
+    "KEYCODE_TV_INPUT:inputs"
+  ],
+  "restore_key_services": true
+}

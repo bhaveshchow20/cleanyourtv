@@ -103,6 +103,15 @@ final class AppLibraryDialog {
     private float scrollOffset;
     private boolean highlightShown;
     private final int catalogWidth;
+    /** design_language tvos27: a full-screen grid over the focused app's colours, see {@link #showTvosCatalog}. */
+    private final boolean tvos;
+    private final TvFocus.Spec spec;
+    private final Set<String> banners = new HashSet<>();
+    private final Map<String, int[]> palettes = new HashMap<>();
+    private Drawable backdrop;
+    private String backdropKey;
+    private Runnable backdropUpdate;
+    private int columns;
 
     private void stopHighlight() {
         if (spring != null) spring.cancel();
@@ -172,8 +181,21 @@ final class AppLibraryDialog {
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(true);
         popup.setAnimationStyle(0);
+        Config cfg = Config.load(activity);
+        tvos = cfg.tvos27();
+        spec = TvFocus.Spec.of(cfg);
+        if (tvos) {
+            columns = Math.max(4, Math.min(8, cfg.columns));
+            panel.setPadding(0, 0, 0, 0);
+            panel.setBackground(TvDesign.backdrop());
+            popup.setWidth(ViewGroup.LayoutParams.MATCH_PARENT);
+            popup.setHeight(ViewGroup.LayoutParams.MATCH_PARENT);
+            if (animations && !reducedMotion) popup.setAnimationStyle(R.style.TvosLibraryWindow);
+            else if (animations) popup.setAnimationStyle(android.R.style.Animation_Dialog);
+        }
         popup.setOnDismissListener(() -> {
             closed = true;
+            if (backdropUpdate != null) main.removeCallbacks(backdropUpdate);
             dismissActions();
             stopHighlight();
             icons.clear();
@@ -197,6 +219,10 @@ final class AppLibraryDialog {
 
     private void reveal() {
         popup.showAtLocation(activity.getWindow().getDecorView(), Gravity.CENTER, 0, 0);
+        if (tvos) {
+            NavSound.watch(panel);
+            return;
+        }
         View container = panel.getRootView();
         if (container.getLayoutParams() instanceof WindowManager.LayoutParams) {
             WindowManager.LayoutParams params = (WindowManager.LayoutParams) container.getLayoutParams();
@@ -315,18 +341,30 @@ final class AppLibraryDialog {
         icon.setTag(pkg);
         Drawable cached = icons.get(pkg);
         icon.setImageDrawable(cached);
+        if (tvos) styleArt(icon, pkg, cached);
         if (cached != null || !iconsLoading.add(pkg)) return;
         PackageManager pm = activity.getPackageManager();
         LOADER.execute(() -> {
             Drawable loaded;
-            try { loaded = app.loadIcon(pm); }
+            boolean banner = false;
+            try {
+                loaded = tvos ? banner(app, pm) : null;
+                banner = loaded != null;
+                if (loaded == null) loaded = app.loadIcon(pm);
+            }
             catch (RuntimeException unavailable) { loaded = null; }
             Drawable result = loaded;
+            boolean isBanner = banner;
             main.post(() -> {
                 iconsLoading.remove(pkg);
                 if (closed) return;
                 Drawable shown = result != null ? result : activity.getDrawable(R.drawable.ic_apps);
+                if (isBanner) banners.add(pkg);
                 icons.put(pkg, shown);
+                if (tvos && pkg.equals(icon.getTag())) {
+                    styleArt(icon, pkg, shown);
+                    if (pkg.equals(selectedPackage)) scheduleBackdrop(pkg);
+                }
                 // The view may show another app by now; a view bound to it later takes it from the cache.
                 if (pkg.equals(icon.getTag())) icon.setImageDrawable(shown);
             });
@@ -349,6 +387,10 @@ final class AppLibraryDialog {
     }
 
     private void showCatalog() {
+        if (tvos) {
+            showTvosCatalog();
+            return;
+        }
         stopHighlight();
         resize(catalogWidth, dp(280));
         panel.removeAllViews();
@@ -434,6 +476,305 @@ final class AppLibraryDialog {
         });
     }
 
+    // ---- tvOS 27 (design_language tvos27) -----------------------------------------------------------------
+
+    /** The app's TV banner, which tvOS-style cards show edge to edge; null when it has none. */
+    private static Drawable banner(ResolveInfo app, PackageManager pm) {
+        Drawable b = app.activityInfo.loadBanner(pm);
+        if (b == null && app.activityInfo.applicationInfo != null) b = app.activityInfo.applicationInfo.loadBanner(pm);
+        return b;
+    }
+
+    private int pt(float value) {
+        return Math.round(TvDesign.px(activity, value));
+    }
+
+    private int[] palette(String pkg) {
+        int[] p = palettes.get(pkg);
+        Drawable art = icons.get(pkg);
+        if (p == null && art != null) {
+            p = HeroArt.palette(art);
+            palettes.put(pkg, p);
+        }
+        return p;
+    }
+
+    /** A banner fills its card; an icon sits in the middle of a card tinted with its own colours. */
+    private void styleArt(ImageView art, String pkg, Drawable shown) {
+        View card = (View) art.getParent();
+        if (shown != null && banners.contains(pkg)) {
+            art.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            art.setPadding(0, 0, 0, 0);
+            card.setBackground(cardSurface(new int[]{0xFF2C2C30, 0xFF1C1C1E}));
+            return;
+        }
+        art.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int h = card.getLayoutParams() != null ? card.getLayoutParams().height : 0;
+        int pad = Math.max(0, (h - pt(96)) / 2);
+        art.setPadding(pad, pad, pad, pad);
+        int[] p = shown != null ? palette(pkg) : null;
+        card.setBackground(cardSurface(p != null ? new int[]{p[0], p[2]} : placeholder()));
+    }
+
+    private GradientDrawable cardSurface(int[] colors) {
+        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR, colors);
+        bg.setCornerRadius(TvDesign.px(activity, TvDesign.Radius.CARD));
+        return bg;
+    }
+
+    /** A card with nothing of its own to show yet: graphite in dark, white in light. */
+    private static int[] placeholder() {
+        return TvDesign.light ? new int[]{TvDesign.Color.CARD_TOP, TvDesign.Color.CARD_BOTTOM}
+                : new int[]{0xFF3A3A3F, 0xFF1C1C1E};
+    }
+
+    /**
+     * The backdrop in the focused app's colours, fading to near black at the bottom, as Home's does. In light the
+     * colours are a faint wash over light grey, fading to the light scrim.
+     */
+    private Drawable backdropFor(int[] p) {
+        int a = TvDesign.light ? 0x4D000000 : 0xFF000000;
+        GradientDrawable hue = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{p[0] & 0xFFFFFF | a, p[1] & 0xFFFFFF | a, p[2] & 0xFFFFFF | a});
+        GradientDrawable fall = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{TvDesign.scrim(0x40), TvDesign.scrim(0x99), TvDesign.scrim(0xF2)});
+        return new android.graphics.drawable.LayerDrawable(new Drawable[]{
+                new ColorDrawable(TvDesign.light ? TvDesign.Color.BACKDROP_TOP : 0xFF000000), hue, fall});
+    }
+
+    /** Cross-fades the backdrop to {@code pkg}'s colours once focus has rested on it for a moment. */
+    private void scheduleBackdrop(String pkg) {
+        if (backdropUpdate != null) main.removeCallbacks(backdropUpdate);
+        backdropUpdate = () -> {
+            if (closed || pkg.equals(backdropKey)) return;
+            int[] p = palette(pkg);
+            if (p == null) return;
+            backdropKey = pkg;
+            Drawable next = backdropFor(p);
+            int ms = TvMotion.ms(420, reducedMotion);
+            if (backdrop == null || !animations) {
+                panel.setBackground(next);
+            } else {
+                android.graphics.drawable.TransitionDrawable fade =
+                        new android.graphics.drawable.TransitionDrawable(new Drawable[]{backdrop, next});
+                fade.setCrossFadeEnabled(true);
+                panel.setBackground(fade);
+                fade.startTransition(ms);
+            }
+            backdrop = next;
+        };
+        main.postDelayed(backdropUpdate, backdrop == null ? 0 : 140);
+    }
+
+    /**
+     * The library as tvOS lays out its app grid: a full screen of cards in the Home's columns inside the safe area,
+     * the name under a card only while it has focus, over a backdrop in the focused app's colours.
+     */
+    private void showTvosCatalog() {
+        stopHighlight();
+        panel.removeAllViews();
+        int side = pt(TvDesign.Layout.SAFE_SIDE), gutter = pt(TvDesign.Layout.GUTTER);
+        LinearLayout header = new LinearLayout(activity);
+        header.setLayoutDirection(rtl ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
+        header.setGravity(Gravity.BOTTOM);
+        header.setPadding(side, pt(TvDesign.Layout.SAFE_TOP), side, 0);
+        TextView title = new TextView(activity);
+        title.setText(R.string.app_library);
+        TvDesign.type(title, TvDesign.Type.TITLE2);
+        title.setTypeface(TvDesign.font(activity, TvDesign.BOLD));
+        title.setTextColor(TvDesign.Color.LABEL);
+        title.setSingleLine(true);
+        title.setIncludeFontPadding(false);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView count = new TextView(activity);
+        count.setText(activity.getResources().getQuantityString(R.plurals.library_app_count, totalApps, totalApps));
+        TvDesign.type(count, TvDesign.Type.CALLOUT);
+        count.setTextColor(TvDesign.Color.SECONDARY);
+        count.setIncludeFontPadding(false);
+        header.addView(count, new LinearLayout.LayoutParams(-2, -2));
+        panel.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        instructions = new TextView(activity);
+        instructions.setText(hint(false));
+        TvDesign.type(instructions, TvDesign.Type.CALLOUT);
+        instructions.setTextColor(TvDesign.Color.SECONDARY);
+        instructions.setSingleLine(true);
+        instructions.setEllipsize(TextUtils.TruncateAt.END);
+        instructions.setTextDirection(rtl ? View.TEXT_DIRECTION_RTL : View.TEXT_DIRECTION_FIRST_STRONG);
+        instructions.setPadding(side, pt(10), side, 0);
+        panel.addView(instructions, new LinearLayout.LayoutParams(-1, -2));
+        if (apps.isEmpty()) {
+            instructions.setVisibility(View.GONE);
+            TextView empty = new TextView(activity);
+            empty.setText(R.string.library_empty);
+            TvDesign.type(empty, TvDesign.Type.HEADLINE);
+            empty.setTextColor(TvDesign.Color.SECONDARY);
+            empty.setPadding(side, pt(80), side, 0);
+            panel.addView(empty, new LinearLayout.LayoutParams(-1, -2));
+            panel.setBackground(backdropFor(new int[]{0xFF2A2C33, 0xFF1A1C22, 0xFF0E0F13}));
+            panel.setFocusableInTouchMode(true);
+            panel.requestFocus();
+            return;
+        }
+        RecyclerView list = new RecyclerView(activity);
+        catalog = list;
+        list.setLayoutDirection(rtl ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
+        androidx.recyclerview.widget.GridLayoutManager grid =
+                new androidx.recyclerview.widget.GridLayoutManager(activity, columns);
+        list.setLayoutManager(grid);
+        list.setItemAnimator(null);
+        list.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        list.setClipToPadding(false);
+        list.setClipChildren(false);
+        list.setPadding(side - gutter / 2, pt(44), side - gutter / 2, pt(TvDesign.Layout.SAFE_BOTTOM));
+        list.setAdapter(new TvosCatalog());
+        panel.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
+        int position = Math.min(selectedPosition, apps.size() - 1);
+        for (int i = 0; i < apps.size(); i++) {
+            if (apps.get(i).activityInfo.packageName.equals(selectedPackage)) { position = i; break; }
+        }
+        grid.scrollToPositionWithOffset(position, selectedOffset);
+        final int target = position;
+        list.post(() -> {
+            if (catalog != list || !popup.isShowing()) return;
+            RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(target);
+            if (holder != null) holder.itemView.requestFocus();
+        });
+        if (backdrop == null) panel.setBackground(backdropFor(new int[]{0xFF2A2C33, 0xFF1A1C22, 0xFF0E0F13}));
+    }
+
+    private final class TvosCatalog extends RecyclerView.Adapter<Row> {
+        @NonNull @Override public Row onCreateViewHolder(@NonNull ViewGroup parent, int type) {
+            int gutter = pt(TvDesign.Layout.GUTTER);
+            int width = (parent.getWidth() - parent.getPaddingLeft() - parent.getPaddingRight()) / columns - gutter;
+            if (width <= 0) width = pt(TvDesign.Layout.columnWidth(columns));
+            LinearLayout item = new LinearLayout(activity);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setGravity(Gravity.CENTER_HORIZONTAL);
+            item.setPadding(gutter / 2, 0, gutter / 2, pt(20));
+            item.setClipChildren(false);
+            item.setClipToPadding(false);
+            item.setFocusable(true);
+            item.setFocusableInTouchMode(true);
+            item.setClickable(true);
+            item.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+            FrameLayout card = new FrameLayout(activity);
+            card.setId(R.id.panel);
+            card.setClipToOutline(true);
+            card.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+            card.setBackground(cardSurface(placeholder()));
+            ImageView art = new ImageView(activity);
+            art.setId(R.id.icon);
+            card.addView(art, new FrameLayout.LayoutParams(-1, -1));
+            View check = new View(activity);
+            check.setId(R.id.dot);
+            FrameLayout.LayoutParams badge = new FrameLayout.LayoutParams(pt(30), pt(30), Gravity.TOP | Gravity.END);
+            badge.setMargins(0, pt(12), pt(12), 0);
+            card.addView(check, badge);
+            item.addView(card, new LinearLayout.LayoutParams(width, Math.round(width * 0.6f)));
+            TextView name = new TextView(activity);
+            name.setId(R.id.title);
+            TvDesign.type(name, TvDesign.Type.CAPTION1);
+            name.setTextColor(TvDesign.Color.LABEL);
+            name.setGravity(Gravity.CENTER);
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            name.setAlpha(0f);
+            LinearLayout.LayoutParams nameAt = new LinearLayout.LayoutParams(-1, -2);
+            nameAt.topMargin = pt(24);
+            item.addView(name, nameAt);
+            TextView status = new TextView(activity);
+            status.setId(R.id.status);
+            TvDesign.type(status, TvDesign.Type.CAPTION2);
+            status.setTextColor(TvDesign.Color.SECONDARY);
+            status.setGravity(Gravity.CENTER);
+            status.setSingleLine(true);
+            status.setAlpha(0f);
+            item.addView(status, new LinearLayout.LayoutParams(-1, -2));
+            return new Row(item);
+        }
+
+        @Override public void onBindViewHolder(@NonNull Row holder, int position) {
+            ResolveInfo app = apps.get(position);
+            String pkg = app.activityInfo.packageName;
+            View item = holder.itemView;
+            View card = item.findViewById(R.id.panel);
+            bindIcon(item.findViewById(R.id.icon), app);
+            TextView name = item.findViewById(R.id.title);
+            name.setText(label(app));
+            card.setContentDescription(label(app));
+            boolean home = onHome.test(pkg);
+            boolean recent = !selectionMode && LibraryApps.recent(installTimes.getOrDefault(pkg, 0L), catalogTime);
+            TextView status = item.findViewById(R.id.status);
+            status.setText(home ? R.string.library_on_home : recent ? R.string.library_recent : R.string.library_add_home);
+            status.setVisibility(home || !okOpens || recent ? View.VISIBLE : View.INVISIBLE);
+            View check = item.findViewById(R.id.dot);
+            int size = pt(home ? 30 : 14);
+            check.getLayoutParams().width = size;
+            check.getLayoutParams().height = size;
+            if (home) check.setBackgroundResource(R.drawable.library_check);
+            else {
+                GradientDrawable dot = new GradientDrawable();
+                dot.setShape(GradientDrawable.OVAL);
+                dot.setColor(0xFF30D158);
+                check.setBackground(dot);
+            }
+            check.setVisibility(home || recent ? View.VISIBLE : View.GONE);
+            boolean focused = item.isFocused();
+            // When OK opens every app, a tick on every card is noise: it shows on the focused card only.
+            boolean quiet = okOpens && home;
+            check.setAlpha(quiet && !focused ? 0f : 1f);
+            TvFocus.snap(card, focused, spec);
+            name.setAlpha(focused ? 1f : 0f);
+            status.setAlpha(focused ? 1f : 0f);
+            item.setOnClickListener(v -> {
+                NavSound.open(v);
+                boolean onHomeNow = onHome.test(pkg);
+                if (LibraryApps.okOpens(selectionMode, okOpens, onHomeNow)) open(app);
+                else changeHome(app, !onHomeNow);
+            });
+            item.setOnLongClickListener(selectionMode ? null : v -> { showActions(app, card); return true; });
+            item.setOnFocusChangeListener((v, has) -> {
+                TvFocus.focus(card, has, spec);
+                int ms = TvMotion.ms(has ? TvDesign.Motion.FOCUS_MS : TvDesign.Motion.UNFOCUS_MS, reducedMotion);
+                name.animate().alpha(has ? 1f : 0f).setDuration(animations ? ms : 0).start();
+                status.animate().alpha(has ? 1f : 0f).setDuration(animations ? ms : 0).start();
+                if (quiet) check.animate().alpha(has ? 1f : 0f).setDuration(animations ? ms : 0).start();
+                if (!has) return;
+                selectedPackage = pkg;
+                instructions.setText(hint(onHome.test(pkg)));
+                int index = holder.getBindingAdapterPosition();
+                if (index != RecyclerView.NO_POSITION) selectedPosition = index;
+                scheduleBackdrop(pkg);
+            });
+            item.setOnKeyListener((v, key, event) -> {
+                TvFocus.key(card, event, spec);
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                int index = holder.getBindingAdapterPosition();
+                if (index == RecyclerView.NO_POSITION) return false;
+                int col = index % columns;
+                int start = rtl ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
+                int end = rtl ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
+                if (key == start) return col == 0;
+                if (key == end) return col == columns - 1 || index == apps.size() - 1;
+                if (key == KeyEvent.KEYCODE_DPAD_UP) return index < columns;
+                if (key == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    int lastRow = (apps.size() - 1) / columns;
+                    if (index / columns >= lastRow) return true;
+                    // A short last row: Down from a column past its end lands on its last app.
+                    if (index + columns >= apps.size()) {
+                        RecyclerView.ViewHolder last = catalog != null
+                                ? catalog.findViewHolderForAdapterPosition(apps.size() - 1) : null;
+                        if (last != null) last.itemView.requestFocus();
+                        return true;
+                    }
+                }
+                return false;
+            });
+        }
+
+        @Override public int getItemCount() { return apps.size(); }
+    }
+
     private void dismissActions() {
         PopupWindow menu = actionPopup;
         actionPopup = null;
@@ -466,7 +807,9 @@ final class AppLibraryDialog {
             if (holder != null) {
                 View card = holder.itemView;
                 RecyclerView.LayoutParams params = (RecyclerView.LayoutParams) card.getLayoutParams();
-                selectedOffset = rtl
+                selectedOffset = tvos
+                        ? catalog.getLayoutManager().getDecoratedTop(card) - params.topMargin - catalog.getPaddingTop()
+                        : rtl
                         ? catalog.getWidth() - catalog.getPaddingRight()
                             - catalog.getLayoutManager().getDecoratedRight(card) - params.rightMargin
                         : catalog.getLayoutManager().getDecoratedLeft(card)
@@ -495,7 +838,9 @@ final class AppLibraryDialog {
             if (holder != null) {
                 View card = holder.itemView;
                 RecyclerView.LayoutParams params = (RecyclerView.LayoutParams) card.getLayoutParams();
-                selectedOffset = rtl
+                selectedOffset = tvos
+                        ? catalog.getLayoutManager().getDecoratedTop(card) - params.topMargin - catalog.getPaddingTop()
+                        : rtl
                         ? catalog.getWidth() - catalog.getPaddingRight()
                             - catalog.getLayoutManager().getDecoratedRight(card) - params.rightMargin
                         : catalog.getLayoutManager().getDecoratedLeft(card)
@@ -525,6 +870,11 @@ final class AppLibraryDialog {
         if (spring != null) spring.cancel();
         View menuPanel = activity.getLayoutInflater().inflate(R.layout.popup_inputs, panel, false);
         LinearLayout rows = menuPanel.findViewById(R.id.rows);
+        if (tvos) {
+            menuPanel.setBackground(LiquidGlass.platter(activity));
+            int pad = Math.round(TvDesign.px(activity, 14));
+            menuPanel.setPadding(pad, pad, pad, pad);
+        }
         PopupWindow menu = new PopupWindow(menuPanel, dp(220), ViewGroup.LayoutParams.WRAP_CONTENT, true);
         actionPopup = menu;
         menu.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -578,6 +928,8 @@ final class AppLibraryDialog {
     private void addAction(LinearLayout rows, int label, Runnable action) {
         View row = activity.getLayoutInflater().inflate(R.layout.item_input, rows, false);
         ((TextView) row.findViewById(R.id.title)).setText(label);
+        if (tvos) ((TextView) row.findViewById(R.id.title)).setTextColor(new android.content.res.ColorStateList(
+                new int[][]{{android.R.attr.state_focused}, {}}, new int[]{TvDesign.Glass.FOCUSED_TEXT, TvDesign.Color.LABEL}));
         row.setFocusableInTouchMode(true);
         row.findViewById(R.id.icon).setVisibility(View.GONE);
         row.findViewById(R.id.dot).setVisibility(View.GONE);
@@ -599,7 +951,7 @@ final class AppLibraryDialog {
         view.setGravity(rtl ? Gravity.RIGHT : Gravity.LEFT);
         view.setTextSize(size);
         view.setTextColor(color);
-        view.setTypeface(UiFont.get(activity, R.string.font_medium));
+        view.setTypeface(tvos ? TvDesign.font(activity, TvDesign.MEDIUM) : UiFont.get(activity, R.string.font_medium));
         view.setLetterSpacing(0.01f);
         view.setIncludeFontPadding(false);
         return view;
